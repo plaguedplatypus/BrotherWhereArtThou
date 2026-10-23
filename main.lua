@@ -1,9 +1,14 @@
+-- This file owns saved run state and the dock. The world overlays share that
+-- state; the puzzle reads its live interface, and barrowsPanel reads the game's
+-- creature count.
 local barrowsPanel = require("ui/barrowsPanel")
 local mounds = require("ui/mounds")
 local puzzle = require("ui/puzzle")
 local sarcophagus = require("ui/sarcophagus")
 local tunnels = require("ui/tunnels")
 local storageName = "barrowsTunnelV1"
+-- BARROWS_KILLS packs the six original brothers into separate low bits.
+-- Akrisae and Linza use their own VarPlayers, so they have no masks here.
 local brothers = {
     { id = "verac", name = "Verac", mask = 0x20 },
     { id = "akrisae", name = "Akrisae" },
@@ -121,8 +126,10 @@ local function clearRun()
     save()
 end
 
--- Reconcile the saved run with the game's kill flags and quest unlocks. This
--- also runs after reload, when VarTransmit may not send the current values.
+-- Reconcile the saved run with the game's kill flags and quest unlocks. The
+-- 0x10000 bit marks an opened chest; the packed count starting at 0x20000 is a
+-- fallback for Akrisae when his own flag is unavailable. Run this after reload
+-- too, since VarTransmit may not send the current values.
 local function syncSlain()
     local killsVar = var.VarPlayer.BARROWS_KILLS
     local kills = killsVar and killsVar.value
@@ -455,7 +462,9 @@ Event.VarTransmit.Subscribe("barrowsTunnelKills", function(event)
         queue(syncSlain)
     end
 end)
--- Remember the searched sarcophagus long enough to match its follow-up dialog.
+-- A Search action names the brother, but its hidden-tunnel dialog arrives
+-- later. Keep that brother for the logic poll and check again on Continue,
+-- then discard it so another dialog cannot confirm the wrong sarcophagus.
 Event.MiniMenuEntrySelected.Subscribe("barrowsTunnelSarcophagus", function(event)
     local entry = event.entry
     if entry.actionEntryType == MiniMenuEntryType.LOC
