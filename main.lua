@@ -69,6 +69,7 @@ local sarcophagusTicks = 0
 local pendingSarcophagus
 local creatureCount
 
+-- Persist the shared run and rebuild the dock on the next logic tick.
 local function save()
     PersistentDB:SetStructuredData(storageName, data)
     contentDirty = true
@@ -79,6 +80,7 @@ local function queue(action)
     pending[#pending + 1] = action
 end
 
+-- Make dock text click through so it cannot intercept nearby controls.
 local function text(parent, value, x, y, width, height)
     local label = ui.Text.new(parent)
     label:SetPos(x, y)
@@ -90,6 +92,7 @@ local function text(parent, value, x, y, width, height)
     return label
 end
 
+-- Queue dock button actions until after their UI hook finishes.
 local function button(parent, label, x, y, width, height, action)
     local control = ui.Button.new(parent)
     control:SetPos(x, y)
@@ -250,6 +253,7 @@ local function syncSlain()
     end
 end
 
+-- Draw the red strike used for slain brothers in the dock.
 local function redLine(parent, x, y, width, height, invert)
     local line = ui.Line.new(parent)
     line:SetPos(x, y)
@@ -261,6 +265,7 @@ local function redLine(parent, x, y, width, height, invert)
     return line
 end
 
+-- Remove a quest tooltip before its anchor or the dock is rebuilt.
 local function hideInfoTip()
     if infoTip then infoTip:Destroy() end
     infoTip = nil
@@ -299,6 +304,7 @@ local function showInfoTip(icon, name, message)
     infoTip = tip
 end
 
+-- Show a quest requirement while its dock icon is hovered.
 local function infoIcon(root, width, y, name, message)
     local icon = ui.Layer.new(root)
     icon:SetPos(width - 29, y + 1)
@@ -306,7 +312,7 @@ local function infoIcon(root, width, y, name, message)
     icon.clickthrough = false
     local sprite = ui.Sprite.new(icon)
     sprite:SetSize(18, 18)
-    sprite.spriteID = id.Sprite.RS3_ICON_INFO_21PX_2
+    sprite.spriteID = id.Sprite.RS3_ICON_INFO
     sprite.clickthrough = true
     icon:Subscribe(ui.Hook.ONMOUSEOVER, function()
         showInfoTip(icon, name, message)
@@ -314,6 +320,7 @@ local function infoIcon(root, width, y, name, message)
     icon:Subscribe(ui.Hook.ONMOUSELEAVE, hideInfoTip)
 end
 
+-- Separate the dock's brother list from its counts and quest details.
 local function divider(root, width, y)
     local line = ui.Rectangle.new(root)
     line:SetPos(8, y)
@@ -323,6 +330,7 @@ local function divider(root, width, y)
     line.clickthrough = true
 end
 
+-- Show all brothers, including locked ones, with slain and tunnel marks.
 local function dockBosses(root, width)
     local cellWidth = math.floor((width - 16) / 3)
     local total, slain = 0, 0
@@ -376,6 +384,7 @@ local function dockBosses(root, width)
     divider(root, width, 137)
 end
 
+-- Show quest unlocks, with manual toggles until their status is known.
 local function overviewPage(root, width, height)
     dockBosses(root, width)
     if akrisaeQuestKnown then
@@ -536,6 +545,7 @@ Event.Logic.Subscribe("barrowsTunnelLogic", function()
     tunnels.update()
 end)
 
+-- Release event hooks and restore the game's Barrows panel on unload.
 function PluginShutdown()
     barrowsPanel.restore()
     Event.VarTransmit.Unsubscribe("barrowsTunnelKills")

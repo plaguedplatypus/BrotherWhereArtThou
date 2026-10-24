@@ -67,6 +67,7 @@ local function playerInTunnel()
     return player
 end
 
+-- Follow the loaded floor height so the route sits above tunnel tiles.
 local function floorPoint(tile, level)
     local x, z = (tile.x + 0.5) * 512, (tile.z + 0.5) * 512
     local height, available = World.GetGroundHeight(level, x, z)
@@ -74,6 +75,7 @@ local function floorPoint(tile, level)
     return Vector3.new(x, height + 45, z)
 end
 
+-- Match the player's tile to an outer room; exclude the chest room.
 local function nearestRoom(tile)
     local closest, distance
     for index, place in ipairs(rooms) do
@@ -89,11 +91,13 @@ local function nearestRoom(tile)
     return closest
 end
 
+-- Measure tile distance in the flat maze for route costs.
 local function distance(a, b)
     local dx, dz = a.x - b.x, a.z - b.z
     return math.sqrt(dx * dx + dz * dz)
 end
 
+-- Include corridor bends so outer bypasses cost their full walking distance.
 local function passageLength(passage)
     local length, previous = 0, rooms[passage.from]
     for _, point in ipairs(passage.points) do
@@ -310,11 +314,13 @@ local function draw()
     })
 end
 
+-- Read the shared tunnel choice and draw the route each frame.
 function tunnels.start(data)
     run = data
     Event.Draw.Subscribe("barrowsTunnelRoute", draw)
 end
 
+-- Remove the draw hook and forget door states when the plugin unloads.
 function tunnels.stop()
     Event.Draw.Unsubscribe("barrowsTunnelRoute")
     states, target, room, route, pendingDoor = nil, nil, nil, nil, nil

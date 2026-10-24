@@ -85,6 +85,7 @@ function puzzle.update()
     marker.hidden = false
 end
 
+-- Restore any lit answer before removing the puzzle marker on unload.
 function puzzle.stop()
     clear()
     if marker then marker:Destroy() end

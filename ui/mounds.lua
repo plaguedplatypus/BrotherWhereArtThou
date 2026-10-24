@@ -12,15 +12,16 @@ local labelMounds = {
     { id = "karil", name = "Karil", mound = "karil", style = "ranged" }
 }
 local styleSprites = {
-    melee = id.Sprite.COMBAT_STYLE_ICON_MELEE_0,
-    ranged = id.Sprite.COMBAT_STYLE_ICON_RANGED_0,
-    magic = id.Sprite.COMBAT_STYLE_ICON_MAGIC_0
+    melee = id.Sprite.HITMARK_ICON_MELEE,
+    ranged = id.Sprite.HITMARK_ICON_RANGED,
+    magic = id.Sprite.HITMARK_ICON_MAGIC
 }
 
 local run, coords, labelsRoot, labels
 local spadeCount
 local markerTime = 0
 
+-- Draw the red X over a slain brother's style icon and strike through its name.
 local function redLine(parent, x, y, width, height, invert)
     local line = ui.Line.new(parent)
     line:SetPos(x, y)
@@ -32,10 +33,11 @@ local function redLine(parent, x, y, width, height, invert)
     return line
 end
 
+-- Use the incoming combat style beside each mound name.
 local function styleIcon(parent, style)
     local icon = ui.Sprite.new(parent)
     icon:SetPos(1, 4)
-    icon:SetSize(14, 14)
+    icon:SetSize(16, 16)
     icon.spriteID = styleSprites[style]
     icon.clickthrough = true
     return icon
@@ -228,6 +230,7 @@ local function draw(drawEvent)
     end
 end
 
+-- Log selected Dig-with actions to help identify surface spades in the client.
 local function logSpade(event)
     local entry = event.entry
     if entry.verbText ~= "Dig-with" or entry.subjectText ~= "Spade" then return end
@@ -240,12 +243,14 @@ local function logSpade(event)
     end
 end
 
+-- Use the shared run for labels and subscribe to draw and Dig-with events.
 function mounds.start(data)
     run = data
     Event.Draw.Subscribe("barrowsTunnelLabels", draw)
     Event.MiniMenuEntrySelected.Subscribe("barrowsTunnelSpade", logSpade)
 end
 
+-- Rebuild labels after the game replaces their parent interface.
 function mounds.update()
     if labelsRoot and not ui.Interfaces:GetInterface(labelsRoot.interfaceID) then
         labelsRoot, labels = nil, nil
@@ -253,6 +258,7 @@ function mounds.update()
     if not labelsRoot then buildLabels() end
 end
 
+-- Remove mound hooks and labels when the plugin unloads.
 function mounds.stop()
     Event.Draw.Unsubscribe("barrowsTunnelLabels")
     Event.MiniMenuEntrySelected.Unsubscribe("barrowsTunnelSpade")

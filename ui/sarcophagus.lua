@@ -203,6 +203,7 @@ local function draw(drawEvent)
     marker.hidden = false
 end
 
+-- Share the run's tunnel and kill state with the crypt overlay.
 function sarcophagus.start(data)
     run = data
     Event.Draw.Subscribe("barrowsTunnelSarcophagusBox", draw)
@@ -236,6 +237,7 @@ function sarcophagus.update()
     caption.hidden = true
 end
 
+-- Remove the world overlay and its UI labels on plugin unload.
 function sarcophagus.stop()
     Event.Draw.Unsubscribe("barrowsTunnelSarcophagusBox")
     if marker then marker:Destroy() end
