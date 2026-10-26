@@ -5,6 +5,7 @@ local barrowsPanel = require("ui/barrowsPanel")
 local mounds = require("ui/mounds")
 local puzzle = require("ui/puzzle")
 local sarcophagus = require("ui/sarcophagus")
+local settings = require("ui/settings")
 local tunnels = require("ui/tunnels")
 local storageName = "barrowsTunnelV1"
 -- BARROWS_KILLS packs the six original brothers into separate low bits.
@@ -33,32 +34,70 @@ for _, brother in ipairs(brothers) do names[brother.id] = brother.name end
 
 local data = {
     selected = nil, slain = {}, showAkrisae = false, showLinza = false,
-    chestOpen = false, linzaKills = 0, linzaCounted = false
+    manualLinza = false,
+    chestOpen = false, linzaKills = 0, linzaCounted = false,
+    showLinzaKC = true, showCombatStyles = true
 }
-local saved = PersistentDB:GetStructuredData(storageName)
-if type(saved) == "table" then
+local accountKey
+local gameReady = Player.IsAvailable()
+
+-- The self player's display name separates local saves without permissions.
+-- A name change starts a new save because no stable ID is available here.
+local function currentAccount()
+    if not gameReady or not Player.IsAvailable() then return nil end
+    local player = Player.GetEntity()
+    if not player or not player.isValid or player.displayName == "" then return nil end
+    return storageName .. ":name:" .. player.displayName:lower()
+end
+
+-- Reset the shared table in place because every world overlay holds it.
+-- Keep the old unscoped save untouched: it cannot be assigned to an account.
+local function loadAccount(key)
+    data.selected, data.slain = nil, {}
+    data.showAkrisae, data.showLinza = false, false
+    data.manualLinza = false
+    data.chestOpen, data.linzaKills, data.linzaCounted = false, 0, false
+    data.showLinzaKC, data.showCombatStyles = true, true
+    if not key then return end
+
+    local saved = PersistentDB:GetStructuredData(key)
+    if type(saved) ~= "table" then return end
     if names[saved.selected] then data.selected = saved.selected end
-    if saved.showAkrisae == true then data.showAkrisae = true end
+    -- Keep the last quest-derived value until the game supplies it again, so
+    -- an active Akrisae tunnel choice survives a plugin reload. Ignore saves
+    -- made with the removed Akrisae manual override.
+    if saved.showAkrisae == true and saved.manualAkrisae ~= true then
+        data.showAkrisae = true
+    end
     if saved.showLinza == true then data.showLinza = true end
+    if saved.manualLinza == true then data.manualLinza = true end
     if saved.chestOpen == true then data.chestOpen = true end
     if type(saved.linzaKills) == "number" and saved.linzaKills >= 0
         and saved.linzaKills < math.huge then
         data.linzaKills = math.floor(saved.linzaKills)
     end
     if saved.linzaCounted == true then data.linzaCounted = true end
+    -- Older checkbox callbacks could store 0/1 instead of booleans.
+    if saved.showLinzaKC == false or saved.showLinzaKC == 0 then
+        data.showLinzaKC = false
+    end
+    if saved.showCombatStyles == false or saved.showCombatStyles == 0 then
+        data.showCombatStyles = false
+    end
     if type(saved.slain) == "table" then
         for id in pairs(names) do
             if saved.slain[id] == true then data.slain[id] = true end
         end
         if saved.slain.linza == true then data.slain.linza = true end
     end
-end
-if not data.showAkrisae then
-    if data.selected == "akrisae" then data.selected = nil end
-    data.slain.akrisae = nil
+    if not data.showAkrisae then
+        if data.selected == "akrisae" then data.selected = nil end
+        data.slain.akrisae = nil
+    end
 end
 
 local contentParent, contentRoot, infoTip
+local page = "overview"
 local pending = {}
 local contentDirty = true
 local syncPending = true
@@ -68,11 +107,33 @@ local waitingForReset = false
 local sarcophagusTicks = 0
 local pendingSarcophagus
 local creatureCount
+local barrowsCount
 
 -- Persist the shared run and rebuild the dock on the next logic tick.
 local function save()
-    PersistentDB:SetStructuredData(storageName, data)
+    if accountKey then PersistentDB:SetStructuredData(accountKey, data) end
     contentDirty = true
+end
+
+-- Swap accounts before reading kill flags or processing queued dock actions.
+-- Clearing overlay scans also removes the previous character's world marks.
+local function setAccount(key)
+    if key == accountKey then return end
+    accountKey = key
+    loadAccount(key)
+    pending = {}
+    page = "overview"
+    syncPending = key ~= nil
+    syncTicks = 0
+    akrisaeQuestKnown, linzaQuestKnown = false, false
+    waitingForReset = false
+    pendingSarcophagus, sarcophagusTicks = nil, 0
+    creatureCount = nil
+    barrowsCount = nil
+    contentDirty = true
+    mounds.scan()
+    sarcophagus.scan()
+    tunnels.scan()
 end
 
 -- UI callbacks queue changes so a component is never destroyed in its own hook.
@@ -92,19 +153,6 @@ local function text(parent, value, x, y, width, height)
     return label
 end
 
--- Queue dock button actions until after their UI hook finishes.
-local function button(parent, label, x, y, width, height, action)
-    local control = ui.Button.new(parent)
-    control:SetPos(x, y)
-    control:SetSize(width, height)
-    control.stylesheetID = id.StyleSheet.BUTTON_DEFAULT
-    control.label = label
-    control:Subscribe(ui.Hook.ONBUTTONPRESSED, function()
-        queue(action)
-    end)
-    return control
-end
-
 -- Linza cannot lead to the tunnels. Once only one eligible brother remains,
 -- that brother identifies the tunnel even before its prompt is seen.
 local function remaining()
@@ -117,23 +165,25 @@ local function remaining()
     return count, last
 end
 
--- Clear the current run while leaving the lifetime Linza count intact.
+-- Reset the run after the chest closes, leaving lifetime Linza kills intact.
 local function clearRun()
     data.selected = nil
     data.slain = {}
     data.chestOpen = false
     pendingSarcophagus = nil
     sarcophagusTicks = 0
-    -- A manual clear can happen while the previous run's kill flags are set.
+    -- Wait for separate boss flags to clear before accepting the next run.
     waitingForReset = true
     save()
 end
 
--- Reconcile the saved run with the game's kill flags and quest unlocks. The
+-- Reconcile the saved run with the game's kill flags and quest unlocks. Linza
+-- alone can use a saved manual choice; Akrisae always follows his quest. The
 -- 0x10000 bit marks an opened chest; the packed count starting at 0x20000 is a
 -- fallback for Akrisae when his own flag is unavailable. Run this after reload
 -- too, since VarTransmit may not send the current values.
 local function syncSlain()
+    if not accountKey then return end
     local killsVar = var.VarPlayer.BARROWS_KILLS
     local kills = killsVar and killsVar.value
     local akrisaeFlag = var.VarPlayer.MAH5_KILLED_BARROWS_AKRISAE
@@ -178,7 +228,8 @@ local function syncSlain()
                 linzaQuestKnown = true
                 contentDirty = true
             end
-            if data.showLinza ~= kindred.hasFinishedQuest then
+            if not data.manualLinza
+                and data.showLinza ~= kindred.hasFinishedQuest then
                 data.showLinza = kindred.hasFinishedQuest
                 if not data.showLinza then data.slain.linza = nil end
                 changed = true
@@ -229,8 +280,8 @@ local function syncSlain()
     if linzaKilled ~= nil then
         -- This bit reset to 0 on a fresh run after being 1 for Linza's kill.
         local slain = linzaKilled == 1
-        -- Keep the counted bit across reloads and manual clears while the kill
-        -- flag is set. It resets only when the game clears the flag.
+        -- Keep the counted bit across reloads while the kill flag is set.
+        -- It resets only when the game clears the flag.
         if playerAvailable and slain and not data.linzaCounted then
             data.linzaKills = data.linzaKills + 1
             data.linzaCounted = true
@@ -250,6 +301,21 @@ local function syncSlain()
             if count == 1 then data.selected = last end
         end
         save()
+    end
+end
+
+-- The Beasts counter resets at 60,000 when prestiged. Include completed
+-- prestiges so this dock readout remains a lifetime Barrows Brothers KC.
+local function syncBarrowsCount()
+    local killsVar = var.VarPlayer.BSLAY_KILLS_BARROWS
+    local prestigeVar = var.VarPlayer.BSLAY_PRESTIGE_BARROWS
+    local kills = killsVar and killsVar.value
+    local prestige = prestigeVar and prestigeVar.value
+    if kills == nil or prestige == nil then return end
+    local count = kills + prestige * 60000
+    if count ~= barrowsCount then
+        barrowsCount = count
+        contentDirty = true
     end
 end
 
@@ -379,43 +445,32 @@ local function dockBosses(root, width)
         end
     end
     divider(root, width, 91)
-    text(root, "Brothers slain: " .. slain .. "/" .. total, 8, 94, width - 16, 20)
-    text(root, "Creatures slain: " .. (creatureCount or "?"), 8, 115, width - 16, 20)
-    divider(root, width, 137)
+    text(root, "Brothers slain: " .. slain .. "/" .. total, 8, 97, width - 16, 20)
+    text(root, "Creatures slain: " .. (creatureCount or "?"), 8, 118, width - 16, 20)
+    divider(root, width, 140)
 end
 
--- Show quest unlocks, with manual toggles until their status is known.
-local function overviewPage(root, width, height)
+-- Show Linza's manual choice as Shown/Hidden, not as her quest status.
+local function overviewPage(root, width)
     dockBosses(root, width)
+    local akrisaeStatus = "Unknown"
     if akrisaeQuestKnown then
-        text(root, "Akrisae: " .. (data.showAkrisae and "Unlocked" or "Missing quest"),
-            8, 139, width - 43, 23)
-    else
-        button(root, "Show Akrisae: " .. (data.showAkrisae and "On" or "Off"),
-            8, 139, width - 43, 24, function()
-                data.showAkrisae = not data.showAkrisae
-                if not data.showAkrisae then
-                    if data.selected == "akrisae" then data.selected = nil end
-                    data.slain.akrisae = nil
-                end
-                save()
-            end)
+        akrisaeStatus = data.showAkrisae and "Unlocked" or "Missing quest"
     end
-    if linzaQuestKnown then
-        text(root, "Linza: " .. (data.showLinza and "Unlocked" or "Missing quest"),
-            8, 162, width - 43, 23)
-    else
-        button(root, "Show Linza: " .. (data.showLinza and "On" or "Off"),
-            8, 162, width - 43, 24, function()
-                data.showLinza = not data.showLinza
-                save()
-            end)
+    text(root, "Akrisae: " .. akrisaeStatus, 8, 146, width - 43, 23)
+    local linzaStatus = data.showLinza and "Unlocked" or "Missing quest"
+    if not linzaQuestKnown or data.manualLinza then
+        linzaStatus = data.showLinza and "Shown" or "Hidden"
     end
-    text(root, "Linza KC: " .. data.linzaKills, 8, 185, width - 16, 18)
-    button(root, "Clear run", 8, height - 30, 100, 24, clearRun)
-    infoIcon(root, width, 139, "Akrisae", "Requires Ritual of the Mahjarrat.")
-    infoIcon(root, width, 162, "Linza",
-        "Requires Kindred Spirits. Linza cannot lead underground.")
+    text(root, "Linza: " .. linzaStatus, 8, 169, width - 43, 23)
+    divider(root, width, 194)
+    text(root, "Barrows KC: " .. (barrowsCount or "?"), 8, 200, width - 16, 18)
+    if data.showLinzaKC then
+        text(root, "Linza KC: " .. data.linzaKills, 8, 220, width - 16, 18)
+    end
+    infoIcon(root, width, 146, "Akrisae", "Requires Ritual of the Mahjarrat.")
+    infoIcon(root, width, 169, "Linza",
+        "Requires Kindred Spirits.")
 end
 
 -- Rebuild the dock after state or size changes. UI actions are queued so the
@@ -427,13 +482,38 @@ local function buildContent()
     local root = ui.Layer.new(contentParent)
     root:SetSize(contentParent.width, contentParent.height)
     contentRoot = root
-    local width, height = contentParent.width, contentParent.height
-    local title = text(root, "BROTHER WHERE ART THOU", 8, 5, width - 16, 18)
+    local width = contentParent.width
+    local title = text(root,
+        page == "settings" and "SETTINGS" or "BROTHER WHERE ART THOU",
+        8, 5, width - 16, 18)
     title.font = id.Font.CINZEL_12PT_BOLD
     title.colour = Vector4.new(0.95, 0.75, 0.38, 1)
     title.alignVertical = ui.AlignMode.CENTRE
     title.maxLines = 1
-    overviewPage(root, width, height)
+    if page == "settings" then
+        settings.build(root, width, data, queue, save)
+    else
+        overviewPage(root, width)
+    end
+
+    -- Keep navigation at the same bottom-right spot on both dock pages.
+    local nav = ui.Button.new(root)
+    nav:SetPos(width - 30, contentParent.height - 30)
+    nav:SetSize(26, 26)
+    nav.stylesheetID = id.StyleSheet.BUTTON_DEFAULT
+    nav:Subscribe(ui.Hook.ONBUTTONPRESSED, function()
+        queue(function()
+            page = page == "settings" and "overview" or "settings"
+            contentDirty = true
+        end)
+    end)
+    -- Buttons are not component containers, so overlay a click-through icon.
+    local icon = ui.Sprite.new(root)
+    icon:SetPos(width - 27, contentParent.height - 27)
+    icon:SetSize(20, 20)
+    icon.spriteID = page == "settings" and id.Sprite.RS3_ICON_BACK_32PX_0
+        or id.Sprite.RS3_ICON_PLUGIN_HUB_SETTINGS_ACTIVE
+    icon.clickthrough = true
     contentDirty = false
 end
 
@@ -455,7 +535,6 @@ local function checkTunnelPrompt()
         data.selected = mound
         save()
     end
-    log("Barrows Tunnel: tunnel confirmed at " .. names[mound])
 end
 
 mounds.start(data)
@@ -469,6 +548,9 @@ Event.VarTransmit.Subscribe("barrowsTunnelKills", function(event)
         or configName == "MAH5_KILLED_BARROWS_AKRISAE"
         or configName == "SISTER_KILLED_LINZA" then
         queue(syncSlain)
+    elseif configName == "BSLAY_KILLS_BARROWS"
+        or configName == "BSLAY_PRESTIGE_BARROWS" then
+        queue(syncBarrowsCount)
     end
 end)
 -- A Search action names the brother, but its hidden-tunnel dialog arrives
@@ -498,7 +580,13 @@ Event.MiniMenuEntrySelected.Subscribe("barrowsTunnelSarcophagus", function(event
     end
 end)
 Event.GameStateChanged.Subscribe("barrowsTunnelGameState", function(event)
-    if event.newState == GameState.GAME then syncPending = true end
+    if event.newState == GameState.GAME then
+        gameReady = true
+        syncPending = true
+    else
+        gameReady = false
+        setAccount(nil)
+    end
 end)
 Event.ContentLayerReady.Subscribe("barrowsTunnelContent", function(event)
     hideInfoTip()
@@ -507,32 +595,39 @@ Event.ContentLayerReady.Subscribe("barrowsTunnelContent", function(event)
     contentDirty = true
 end)
 Event.Logic.Subscribe("barrowsTunnelLogic", function()
-    local _, creatures = barrowsPanel.read()
-    if creatures ~= nil and creatures ~= creatureCount then
-        creatureCount = creatures
-        contentDirty = true
+    setAccount(currentAccount())
+    if accountKey then
+        local _, creatures = barrowsPanel.read()
+        if creatures ~= nil and creatures ~= creatureCount then
+            creatureCount = creatures
+            contentDirty = true
+        end
+        if sarcophagusTicks > 0 then
+            sarcophagusTicks = sarcophagusTicks - 1
+            if sarcophagusTicks % 5 == 0 then checkTunnelPrompt() end
+            if sarcophagusTicks == 0 then pendingSarcophagus = nil end
+        end
+        if syncPending then
+            syncPending = false
+            syncSlain()
+            syncBarrowsCount()
+        end
+        -- A plugin reload can occur before the client has populated its VarPlayers.
+        syncTicks = syncTicks + 1
+        if syncTicks >= 50 then
+            syncTicks = 0
+            syncSlain()
+            syncBarrowsCount()
+            mounds.scan()
+            sarcophagus.scan()
+            tunnels.scan()
+        end
+        local actions = pending
+        pending = {}
+        for _, action in ipairs(actions) do action() end
+    else
+        pending = {}
     end
-    if sarcophagusTicks > 0 then
-        sarcophagusTicks = sarcophagusTicks - 1
-        if sarcophagusTicks % 5 == 0 then checkTunnelPrompt() end
-        if sarcophagusTicks == 0 then pendingSarcophagus = nil end
-    end
-    if syncPending then
-        syncPending = false
-        syncSlain()
-    end
-    -- A plugin reload can occur before the client has populated its VarPlayers.
-    syncTicks = syncTicks + 1
-    if syncTicks >= 50 then
-        syncTicks = 0
-        syncSlain()
-        mounds.scan()
-        sarcophagus.scan()
-        tunnels.scan()
-    end
-    local actions = pending
-    pending = {}
-    for _, action in ipairs(actions) do action() end
     if contentParent and not ui.Interfaces:GetInterface(contentParent.interfaceID) then
         hideInfoTip()
         contentParent, contentRoot = nil, nil
@@ -544,6 +639,8 @@ Event.Logic.Subscribe("barrowsTunnelLogic", function()
     sarcophagus.update()
     tunnels.update()
 end)
+
+log("Breaking into the crypt!")
 
 -- Release event hooks and restore the game's Barrows panel on unload.
 function PluginShutdown()

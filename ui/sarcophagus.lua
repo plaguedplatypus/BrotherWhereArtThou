@@ -9,9 +9,7 @@ local boxPositions = {
     Vector3.new(-0.5, 1, -0.5), Vector3.new(0.5, 1, -0.5),
     Vector3.new(0.5, 1, 0.5), Vector3.new(-0.5, 1, 0.5)
 }
-local box = ShapeData.new()
-box.positions = boxPositions
-box.lines = {
+local boxEdges = {
     0, 1, 1, 2, 2, 3, 3, 0,
     4, 5, 5, 6, 6, 7, 7, 4,
     0, 4, 1, 5, 2, 6, 3, 7
@@ -28,12 +26,46 @@ fill.tris = {
     3, 0, 4, 3, 4, 7
 }
 
-local cross = ShapeData.new()
-cross.positions = {
-    Vector3.new(-0.35, 0, -0.35), Vector3.new(0.35, 0, 0.35),
-    Vector3.new(-0.35, 0, 0.35), Vector3.new(0.35, 0, -0.35)
+-- Solid edge beams give both renderers the same border width. World lines
+-- appeared broad on OpenGL but nearly hairline thin on Vulkan.
+local outline = ShapeData.new()
+local outlinePositions, outlineTris = {}, {}
+local beamFaces = {
+    0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7,
+    0, 1, 5, 0, 5, 4, 1, 2, 6, 1, 6, 5,
+    2, 3, 7, 2, 7, 6, 3, 0, 4, 3, 4, 7
 }
-cross.lines = { 0, 1, 2, 3 }
+for index = 1, #boxEdges, 2 do
+    local from = boxPositions[boxEdges[index] + 1]
+    local to = boxPositions[boxEdges[index + 1] + 1]
+    local x0, x1 = math.min(from.x, to.x) - 0.008, math.max(from.x, to.x) + 0.008
+    local y0, y1 = math.min(from.y, to.y) - 0.03, math.max(from.y, to.y) + 0.03
+    local z0, z1 = math.min(from.z, to.z) - 0.008, math.max(from.z, to.z) + 0.008
+    local first = #outlinePositions
+    outlinePositions[first + 1] = Vector3.new(x0, y0, z0)
+    outlinePositions[first + 2] = Vector3.new(x1, y0, z0)
+    outlinePositions[first + 3] = Vector3.new(x1, y0, z1)
+    outlinePositions[first + 4] = Vector3.new(x0, y0, z1)
+    outlinePositions[first + 5] = Vector3.new(x0, y1, z0)
+    outlinePositions[first + 6] = Vector3.new(x1, y1, z0)
+    outlinePositions[first + 7] = Vector3.new(x1, y1, z1)
+    outlinePositions[first + 8] = Vector3.new(x0, y1, z1)
+    for _, face in ipairs(beamFaces) do
+        outlineTris[#outlineTris + 1] = first + face
+    end
+end
+outline.positions = outlinePositions
+outline.tris = outlineTris
+
+local cross = ShapeData.new()
+-- Filled strokes stay broad on Vulkan, where world-space line width appears thin.
+cross.positions = {
+    Vector3.new(-0.475, 0, -0.425), Vector3.new(-0.425, 0, -0.475),
+    Vector3.new(0.425, 0, 0.475), Vector3.new(0.475, 0, 0.425),
+    Vector3.new(-0.425, 0, 0.475), Vector3.new(-0.475, 0, 0.425),
+    Vector3.new(0.475, 0, -0.425), Vector3.new(0.425, 0, -0.475)
+}
+cross.tris = { 0, 1, 2, 1, 3, 2, 4, 5, 6, 5, 7, 6 }
 
 local run, selected, tunnel, marker, caption
 local slain = {}
@@ -142,11 +174,10 @@ local function draw(drawEvent)
             ShapeList.Draw({
                 shapeData = cross,
                 translation = Vector3.new(place.origin.x,
-                    place.origin.y + boxHeight * 0.5, place.origin.z),
+                    place.origin.y + boxHeight, place.origin.z),
                 scale = place.size,
-                colour = 0xFF3030DD,
-                lineWidth = 8,
-                ignoreDepth = true
+                colour = 0xFF3030FF,
+                ignoreDepth = false
             })
         end
     end
@@ -156,21 +187,21 @@ local function draw(drawEvent)
 
     local origin, size = tunnel.origin, tunnel.size
 
+    -- Let the player and other world geometry occlude the tunnel highlight.
     ShapeList.Draw({
         shapeData = fill,
         translation = origin,
         scale = size,
-        colour = 0xF4C15C30,
-        ignoreDepth = true
+        colour = 0xF4C15C66,
+        ignoreDepth = false
     })
 
     ShapeList.Draw({
-        shapeData = box,
+        shapeData = outline,
         translation = origin,
         scale = size,
         colour = 0xF4C15CDD,
-        lineWidth = 3,
-        ignoreDepth = true
+        ignoreDepth = false
     })
 
     if not marker or not caption then return end

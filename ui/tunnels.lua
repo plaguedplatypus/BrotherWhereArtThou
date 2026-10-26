@@ -295,7 +295,8 @@ function tunnels.update()
     route = current and buildRoute(player) or nil
 end
 
--- Prepend the player's current floor tile so the line starts at their feet.
+-- Start at the player's feet and draw a floor ribbon; DrawLine's pixel
+-- width is capped and can look too thin as the camera pulls back.
 local function draw()
     if not route then return end
     local player = playerInTunnel()
@@ -306,6 +307,35 @@ local function draw()
 
     local positions = { start }
     for _, point in ipairs(route) do positions[#positions + 1] = point end
+
+    local ribbon, tris = {}, {}
+    for index = 1, #positions - 1 do
+        local from, to = positions[index], positions[index + 1]
+        local dx, dz = to.x - from.x, to.z - from.z
+        local length = math.sqrt(dx * dx + dz * dz)
+        if length > 0 then
+            local offsetX, offsetZ = -dz * 16 / length, dx * 16 / length
+            local first = #ribbon
+            ribbon[first + 1] = Vector3.new(from.x + offsetX, from.y, from.z + offsetZ)
+            ribbon[first + 2] = Vector3.new(from.x - offsetX, from.y, from.z - offsetZ)
+            ribbon[first + 3] = Vector3.new(to.x + offsetX, to.y, to.z + offsetZ)
+            ribbon[first + 4] = Vector3.new(to.x - offsetX, to.y, to.z - offsetZ)
+            tris[#tris + 1] = first
+            tris[#tris + 1] = first + 1
+            tris[#tris + 1] = first + 2
+            tris[#tris + 1] = first + 1
+            tris[#tris + 1] = first + 3
+            tris[#tris + 1] = first + 2
+        end
+    end
+    if #tris > 0 then
+        ShapeList.Draw({
+            shapePositions = ribbon,
+            shapeTris = tris,
+            colour = 0xF4C15CCC,
+            ignoreDepth = false
+        })
+    end
     ShapeList.DrawLine({
         positions = positions,
         colour = 0xF4C15CDD,

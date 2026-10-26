@@ -18,7 +18,6 @@ local styleSprites = {
 }
 
 local run, coords, labelsRoot, labels
-local spadeCount
 local markerTime = 0
 
 -- Draw the red X over a slain brother's style icon and strike through its name.
@@ -67,10 +66,6 @@ function mounds.scan()
             return false
         end
     })
-    if #spades ~= spadeCount then
-        spadeCount = #spades
-        log("Barrows Tunnel: mound spades found=" .. spadeCount)
-    end
     if #spades ~= 6 then return end
 
     -- North to south gives two northern mounds, Ahrim, two southern
@@ -171,6 +166,12 @@ local function draw(drawEvent)
     if not labelsRoot or not labels then return end
     local parent = labelsRoot.parent
     if not parent then return end
+    -- The full world map's game-world component is absent when the map closes,
+    -- even though its other UI components stay loaded for the minimap.
+    local mapWorld = ui.Interfaces:GetComponent(id.Component.WORLDMAP_V2__GAME_WORLD)
+    local mapOpen = mapWorld and mapWorld.visibleGlobal or false
+    labelsRoot.hidden = mapOpen
+    if mapOpen then return end
     local screenOrigin = parent.xyGlobal
     markerTime = (markerTime + drawEvent.timeDeltaSecs) % 1.2
     local pulse = 0.5 + 0.5 * math.cos(markerTime * math.pi * 2 / 1.2)
@@ -214,8 +215,10 @@ local function draw(drawEvent)
             else
                 label.marker.hidden = true
             end
-            if label.slain ~= slain or label.selected ~= selected then
+            if label.slain ~= slain or label.selected ~= selected
+                or label.showCombatStyles ~= run.showCombatStyles then
                 label.slain, label.selected = slain, selected
+                label.showCombatStyles = run.showCombatStyles
                 label.name.colour = selected and Vector4.new(1, 0.92, 0.56, 1)
                     or slain and Vector4.new(0.65, 0.63, 0.61, 1)
                     or Vector4.new(1, 0.90, 0.68, 1)
@@ -223,31 +226,25 @@ local function draw(drawEvent)
                     or Vector4.new(0, 0, 0, 0.30)
                 label.frame.colour = selected and Vector4.new(1, 0.78, 0.29, 1)
                     or Vector4.new(0.58, 0.48, 0.31, 0.75)
-                label.icon.hidden = slain
-                for _, mark in ipairs(label.marks) do mark.hidden = not slain end
+                label.icon.hidden = slain or not run.showCombatStyles
+                -- With style icons hidden, use the full label for the name and
+                -- keep the slain strike without an X in the empty icon space.
+                label.name:SetPos(run.showCombatStyles and 15 or 0, 0)
+                label.name:SetSize(run.showCombatStyles and 73 or 92, 22)
+                label.marks[1].hidden = not (slain and run.showCombatStyles)
+                label.marks[2].hidden = not (slain and run.showCombatStyles)
+                label.marks[3]:SetPos(run.showCombatStyles and 19 or 4, 11)
+                label.marks[3]:SetSize(run.showCombatStyles and 67 or 84, 1)
+                label.marks[3].hidden = not slain
             end
         end
     end
 end
 
--- Log selected Dig-with actions to help identify surface spades in the client.
-local function logSpade(event)
-    local entry = event.entry
-    if entry.verbText ~= "Dig-with" or entry.subjectText ~= "Spade" then return end
-    local loc = entry.locData
-    if loc then
-        log("Barrows Tunnel: spade loc=" .. loc.config.configName
-            .. " tile=" .. loc.coordGridX .. "," .. loc.coordGridZ)
-    else
-        log("Barrows Tunnel: spade action type=" .. tostring(entry.actionEntryType))
-    end
-end
-
--- Use the shared run for labels and subscribe to draw and Dig-with events.
+-- Use the shared run for labels and subscribe to drawing them.
 function mounds.start(data)
     run = data
     Event.Draw.Subscribe("barrowsTunnelLabels", draw)
-    Event.MiniMenuEntrySelected.Subscribe("barrowsTunnelSpade", logSpade)
 end
 
 -- Rebuild labels after the game replaces their parent interface.
@@ -261,7 +258,6 @@ end
 -- Remove mound hooks and labels when the plugin unloads.
 function mounds.stop()
     Event.Draw.Unsubscribe("barrowsTunnelLabels")
-    Event.MiniMenuEntrySelected.Unsubscribe("barrowsTunnelSpade")
     if labelsRoot then labelsRoot:Destroy() end
     labelsRoot, labels = nil, nil
 end
