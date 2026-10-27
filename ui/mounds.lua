@@ -19,6 +19,7 @@ local styleSprites = {
 
 local run, coords, labelsRoot, labels
 local markerTime = 0
+local blinkPeriod = 0.4
 
 -- Draw the red X over a slain brother's style icon and strike through its name.
 local function redLine(parent, x, y, width, height, invert)
@@ -173,8 +174,8 @@ local function draw(drawEvent)
     labelsRoot.hidden = mapOpen
     if mapOpen then return end
     local screenOrigin = parent.xyGlobal
-    markerTime = (markerTime + drawEvent.timeDeltaSecs) % 1.2
-    local pulse = 0.5 + 0.5 * math.cos(markerTime * math.pi * 2 / 1.2)
+    -- Match the map marker's short visible and hidden intervals.
+    markerTime = (markerTime + drawEvent.timeDeltaSecs) % blinkPeriod
     for _, entry in ipairs(labelMounds) do
         local label = labels[entry.id]
         local coord = coords and coords[entry.mound]
@@ -210,8 +211,7 @@ local function draw(drawEvent)
                 if label.marker.x ~= x + 32 or label.marker.y ~= y - 18 then
                     label.marker:SetPos(x + 32, y - 18)
                 end
-                label.marker.alpha = 0.35 + pulse * 0.65
-                label.marker.hidden = false
+                label.marker.hidden = markerTime >= blinkPeriod / 2
             else
                 label.marker.hidden = true
             end

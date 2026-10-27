@@ -3,5 +3,8 @@
   "version": "1.0.0",
   "contactEmailAddress": "direplatypus@outlook.com",
   "hasRibbonIcon": true,
-  "requiredPermissions": []
+  "requiredPermissions": [],
+  "requiredDependencies": {
+    "prettyui": 6398181
+  }
 }

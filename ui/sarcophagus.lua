@@ -70,6 +70,7 @@ cross.tris = { 0, 1, 2, 1, 3, 2, 4, 5, 6, 5, 7, 6 }
 local run, selected, tunnel, marker, caption
 local slain = {}
 local markerTime = 0
+local blinkPeriod = 0.4
 
 -- Match a sarcophagus to its brother using the game's loc config names.
 local function brotherFor(loc)
@@ -166,7 +167,8 @@ end
 -- Draw red crosses for slain brothers and a filled gold box for the tunnel.
 -- Its caption and chevron are separate UI components projected from the box.
 local function draw(drawEvent)
-    markerTime = (markerTime + drawEvent.timeDeltaSecs) % 1.2
+    -- Match the map marker's short visible and hidden intervals.
+    markerTime = (markerTime + drawEvent.timeDeltaSecs) % blinkPeriod
     if marker then marker.hidden = true end
     if caption then caption.hidden = true end
     for _, place in ipairs(slain) do
@@ -229,9 +231,7 @@ local function draw(drawEvent)
         or y < 18 or y >= parent.height then return end
 
     marker:SetPos(math.floor(x - 14), math.floor(y - 18))
-    local pulse = 0.5 + 0.5 * math.cos(markerTime * math.pi * 2 / 1.2)
-    marker.alpha = 0.35 + pulse * 0.65
-    marker.hidden = false
+    marker.hidden = markerTime >= blinkPeriod / 2
 end
 
 -- Share the run's tunnel and kill state with the crypt overlay.

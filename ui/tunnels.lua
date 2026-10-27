@@ -106,6 +106,9 @@ local function passageLength(passage)
     end
     return length + distance(previous, rooms[passage.to])
 end
+for _, passage in ipairs(passages) do
+    passage.length = passageLength(passage)
+end
 
 -- Find the shortest known-open passage route from an outer room to the puzzle
 -- door's room. A corridor containing the player can be excluded separately.
@@ -131,7 +134,7 @@ local function routeFrom(start, excluded)
                 if passage.from == current then nextRoom = passage.to end
                 if passage.to == current then nextRoom = passage.from end
                 if nextRoom then
-                    local cost = costs[current] + passageLength(passage)
+                    local cost = costs[current] + passage.length
                     if not costs[nextRoom] or cost < costs[nextRoom] then
                         costs[nextRoom] = cost
                         previous[nextRoom] = { room = current, passage = passage }

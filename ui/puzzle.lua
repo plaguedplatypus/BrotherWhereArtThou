@@ -72,7 +72,9 @@ function puzzle.update()
     if not marker then
         local parent = ui.Interfaces:GetComponent(id.Component.TOPLEVEL_V2__PLUGIN_BUILD_LAYER_TOP)
         if not parent then return end
-        marker = ui.Sprite.new(parent)
+        -- The shared top layer can exhaust category 0's dynamic IDs; keep the
+        -- puzzle marker in its own category without changing its draw layer.
+        marker = ui.Sprite.new(parent, 1)
         marker:SetSize(38, 28)
         marker.spriteID = id.Sprite.WALK_MARKER_DEFAULT
         marker.clickthrough = true

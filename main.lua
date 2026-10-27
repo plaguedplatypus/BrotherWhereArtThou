@@ -2,6 +2,8 @@
 -- state; the puzzle reads its live interface, and barrowsPanel reads the game's
 -- creature count.
 local barrowsPanel = require("ui/barrowsPanel")
+local hoverTip = require("ui/hoverTip")
+local loot = require("ui/loot")
 local mounds = require("ui/mounds")
 local puzzle = require("ui/puzzle")
 local sarcophagus = require("ui/sarcophagus")
@@ -34,9 +36,9 @@ for _, brother in ipairs(brothers) do names[brother.id] = brother.name end
 
 local data = {
     selected = nil, slain = {}, showAkrisae = false, showLinza = false,
-    manualLinza = false,
     chestOpen = false, linzaKills = 0, linzaCounted = false,
-    showLinzaKC = true, showCombatStyles = true
+    showLinzaKC = true, showCombatStyles = true,
+    lootRuns = {}, lootCaptured = false
 }
 local accountKey
 local gameReady = Player.IsAvailable()
@@ -55,28 +57,46 @@ end
 local function loadAccount(key)
     data.selected, data.slain = nil, {}
     data.showAkrisae, data.showLinza = false, false
-    data.manualLinza = false
     data.chestOpen, data.linzaKills, data.linzaCounted = false, 0, false
     data.showLinzaKC, data.showCombatStyles = true, true
+    data.lootRuns, data.lootCaptured = {}, false
     if not key then return end
 
     local saved = PersistentDB:GetStructuredData(key)
     if type(saved) ~= "table" then return end
     if names[saved.selected] then data.selected = saved.selected end
-    -- Keep the last quest-derived value until the game supplies it again, so
-    -- an active Akrisae tunnel choice survives a plugin reload. Ignore saves
-    -- made with the removed Akrisae manual override.
+    -- Keep quest-derived visibility while the game reloads quest status so
+    -- active marks survive. Ignore saves made with the removed manual toggles.
     if saved.showAkrisae == true and saved.manualAkrisae ~= true then
         data.showAkrisae = true
     end
-    if saved.showLinza == true then data.showLinza = true end
-    if saved.manualLinza == true then data.manualLinza = true end
+    if saved.showLinza == true and saved.manualLinza ~= true then
+        data.showLinza = true
+    end
     if saved.chestOpen == true then data.chestOpen = true end
     if type(saved.linzaKills) == "number" and saved.linzaKills >= 0
         and saved.linzaKills < math.huge then
         data.linzaKills = math.floor(saved.linzaKills)
     end
     if saved.linzaCounted == true then data.linzaCounted = true end
+    -- Persist only item IDs and quantities, never inventory proxy objects.
+    if type(saved.lootRuns) == "table" then
+        for _, run in ipairs(saved.lootRuns) do
+            if type(run) == "table" then
+                local items = {}
+                for _, item in ipairs(run) do
+                    if type(item) == "table" and type(item.id) == "number"
+                        and item.id > 0 and item.id % 1 == 0
+                        and type(item.count) == "number" and item.count > 0
+                        and item.count % 1 == 0 then
+                        items[#items + 1] = { id = item.id, count = item.count }
+                    end
+                end
+                if #items > 0 then data.lootRuns[#data.lootRuns + 1] = items end
+            end
+        end
+    end
+    data.lootCaptured = saved.lootCaptured == true
     -- Older checkbox callbacks could store 0/1 instead of booleans.
     if saved.showLinzaKC == false or saved.showLinzaKC == 0 then
         data.showLinzaKC = false
@@ -96,10 +116,13 @@ local function loadAccount(key)
     end
 end
 
-local contentParent, contentRoot, infoTip
+local contentParent, contentRoot
 local page = "overview"
 local pending = {}
 local contentDirty = true
+local seenWidth, seenHeight
+local resizeWait = 0
+local resizeQuietTicks = 3
 local syncPending = true
 local syncTicks = 0
 local akrisaeQuestKnown, linzaQuestKnown = false, false
@@ -119,6 +142,7 @@ end
 -- Clearing overlay scans also removes the previous character's world marks.
 local function setAccount(key)
     if key == accountKey then return end
+    loot.destroy()
     accountKey = key
     loadAccount(key)
     pending = {}
@@ -131,6 +155,7 @@ local function setAccount(key)
     creatureCount = nil
     barrowsCount = nil
     contentDirty = true
+    loot.resetScroll()
     mounds.scan()
     sarcophagus.scan()
     tunnels.scan()
@@ -165,11 +190,12 @@ local function remaining()
     return count, last
 end
 
--- Reset the run after the chest closes, leaving lifetime Linza kills intact.
+-- Reset the run after the chest closes, keeping Linza KC and chest history.
 local function clearRun()
     data.selected = nil
     data.slain = {}
     data.chestOpen = false
+    data.lootCaptured = false
     pendingSarcophagus = nil
     sarcophagusTicks = 0
     -- Wait for separate boss flags to clear before accepting the next run.
@@ -177,8 +203,8 @@ local function clearRun()
     save()
 end
 
--- Reconcile the saved run with the game's kill flags and quest unlocks. Linza
--- alone can use a saved manual choice; Akrisae always follows his quest. The
+-- Reconcile the saved run with the game's kill flags and quest unlocks. Both
+-- optional bosses follow their quests rather than manual settings. The
 -- 0x10000 bit marks an opened chest; the packed count starting at 0x20000 is a
 -- fallback for Akrisae when his own flag is unavailable. Run this after reload
 -- too, since VarTransmit may not send the current values.
@@ -228,8 +254,7 @@ local function syncSlain()
                 linzaQuestKnown = true
                 contentDirty = true
             end
-            if not data.manualLinza
-                and data.showLinza ~= kindred.hasFinishedQuest then
+            if data.showLinza ~= kindred.hasFinishedQuest then
                 data.showLinza = kindred.hasFinishedQuest
                 if not data.showLinza then data.slain.linza = nil end
                 changed = true
@@ -331,59 +356,30 @@ local function redLine(parent, x, y, width, height, invert)
     return line
 end
 
--- Remove a quest tooltip before its anchor or the dock is rebuilt.
+-- Release quest tooltips before their dock anchors are rebuilt.
 local function hideInfoTip()
-    if infoTip then infoTip:Destroy() end
-    infoTip = nil
+    hoverTip.hide()
 end
 
--- Put quest tooltips on the top-level plugin layer so the dock cannot clip them.
-local function showInfoTip(icon, name, message)
-    hideInfoTip()
-    local parent = ui.Interfaces:GetComponent(id.Component.TOPLEVEL_V2__PLUGIN_BUILD_LAYER_TOP)
-    if not parent then return end
-    local width, height = 248, 70
-    local point, origin = icon.xyGlobal, parent.xyGlobal
-    local x = math.max(4, math.min(parent.width - width - 4,
-        math.floor(point.x - origin.x - width - 8)))
-    local y = math.max(4, math.min(parent.height - height - 4,
-        math.floor(point.y - origin.y - 6)))
-    local tip = ui.Layer.new(parent)
-    tip:SetPos(x, y)
-    tip:SetSize(width, height)
-    tip.clickthrough = true
-    local backing = ui.Rectangle.new(tip)
-    backing:SetSize(width, height)
-    backing.fill = true
-    backing.colour = Vector4.new(0.07, 0.06, 0.05, 1)
-    backing.clickthrough = true
-    local border = ui.Rectangle.new(tip)
-    border:SetSize(width, height)
-    border.fill = false
-    border.outlineThickness = -1
-    border.colour = Vector4.new(0.65, 0.52, 0.31, 1)
-    border.clickthrough = true
-    local heading = text(tip, name, 10, 6, width - 20, 20)
-    heading.colour = Vector4.new(1, 0.86, 0.58, 1)
-    text(tip, message, 10, 29, width - 20, 37)
-    tip:MoveToFront()
-    infoTip = tip
-end
-
--- Show a quest requirement while its dock icon is hovered.
+-- Quest requirements use PrettyUI's compact game-style tooltip frame.
 local function infoIcon(root, width, y, name, message)
     local icon = ui.Layer.new(root)
     icon:SetPos(width - 29, y + 1)
     icon:SetSize(18, 18)
-    icon.clickthrough = false
     local sprite = ui.Sprite.new(icon)
     sprite:SetSize(18, 18)
     sprite.spriteID = id.Sprite.RS3_ICON_INFO
     sprite.clickthrough = true
+    local label = name .. "<br>" .. message
     icon:Subscribe(ui.Hook.ONMOUSEOVER, function()
-        showInfoTip(icon, name, message)
+        local point = icon.xyGlobal
+        hoverTip.show(point.x, point.y, icon.width, icon.height, label, 190)
+        return true
     end)
-    icon:Subscribe(ui.Hook.ONMOUSELEAVE, hideInfoTip)
+    icon:Subscribe(ui.Hook.ONMOUSELEAVE, function()
+        hoverTip.hide()
+        return true
+    end)
 end
 
 -- Separate the dock's brother list from its counts and quest details.
@@ -450,7 +446,7 @@ local function dockBosses(root, width)
     divider(root, width, 140)
 end
 
--- Show Linza's manual choice as Shown/Hidden, not as her quest status.
+-- Show quest status for the optional bosses when the game supplies it.
 local function overviewPage(root, width)
     dockBosses(root, width)
     local akrisaeStatus = "Unknown"
@@ -458,9 +454,9 @@ local function overviewPage(root, width)
         akrisaeStatus = data.showAkrisae and "Unlocked" or "Missing quest"
     end
     text(root, "Akrisae: " .. akrisaeStatus, 8, 146, width - 43, 23)
-    local linzaStatus = data.showLinza and "Unlocked" or "Missing quest"
-    if not linzaQuestKnown or data.manualLinza then
-        linzaStatus = data.showLinza and "Shown" or "Hidden"
+    local linzaStatus = "Unknown"
+    if linzaQuestKnown then
+        linzaStatus = data.showLinza and "Unlocked" or "Missing quest"
     end
     text(root, "Linza: " .. linzaStatus, 8, 169, width - 43, 23)
     divider(root, width, 194)
@@ -473,10 +469,20 @@ local function overviewPage(root, width)
         "Requires Kindred Spirits.")
 end
 
+-- The Hub can replace its content child without unloading the interface.
+local function hasContentUi()
+    return contentParent and contentRoot
+        and ui.Interfaces:GetInterface(contentParent.interfaceID)
+        and contentRoot.parent == contentParent
+        and contentParent:GetChild(contentRoot.categoryID,
+            contentRoot.dynamicID) == contentRoot
+end
+
 -- Rebuild the dock after state or size changes. UI actions are queued so the
 -- old component tree is never destroyed from one of its own callbacks.
 local function buildContent()
     if not contentParent then return end
+    if contentParent.width < 1 or contentParent.height < 1 then return end
     hideInfoTip()
     if contentRoot then contentRoot:Destroy() end
     local root = ui.Layer.new(contentParent)
@@ -496,24 +502,31 @@ local function buildContent()
         overviewPage(root, width)
     end
 
-    -- Keep navigation at the same bottom-right spot on both dock pages.
-    local nav = ui.Button.new(root)
-    nav:SetPos(width - 30, contentParent.height - 30)
-    nav:SetSize(26, 26)
-    nav.stylesheetID = id.StyleSheet.BUTTON_DEFAULT
-    nav:Subscribe(ui.Hook.ONBUTTONPRESSED, function()
-        queue(function()
-            page = page == "settings" and "overview" or "settings"
-            contentDirty = true
+    -- The backpack opens a separate loot window; the settings cog still
+    -- changes pages inside the Hub and becomes a back arrow there.
+    local function nav(x, spriteId, action)
+        local button = ui.Button.new(root)
+        button:SetPos(x, contentParent.height - 30)
+        button:SetSize(26, 26)
+        button.stylesheetID = id.StyleSheet.BUTTON_DEFAULT
+        button:Subscribe(ui.Hook.ONBUTTONPRESSED, function()
+            queue(action)
         end)
+        -- Buttons are not containers, so the icon sits on top and clicks through.
+        local icon = ui.Sprite.new(root)
+        icon:SetPos(x + 3, contentParent.height - 27)
+        icon:SetSize(20, 20)
+        icon.spriteID = spriteId
+        icon.clickthrough = true
+    end
+    nav(4, id.Sprite.RS3_MENU_ICON_BACKPACK_NORMAL, function()
+        loot.open(data.lootRuns)
     end)
-    -- Buttons are not component containers, so overlay a click-through icon.
-    local icon = ui.Sprite.new(root)
-    icon:SetPos(width - 27, contentParent.height - 27)
-    icon:SetSize(20, 20)
-    icon.spriteID = page == "settings" and id.Sprite.RS3_ICON_BACK_32PX_0
-        or id.Sprite.RS3_ICON_PLUGIN_HUB_SETTINGS_ACTIVE
-    icon.clickthrough = true
+    nav(width - 30, page == "settings" and id.Sprite.RS3_ICON_BACK_32PX_0
+        or id.Sprite.RS3_ICON_PLUGIN_HUB_SETTINGS_ACTIVE, function()
+        page = page == "settings" and "overview" or "settings"
+        contentDirty = true
+    end)
     contentDirty = false
 end
 
@@ -540,6 +553,16 @@ end
 mounds.start(data)
 sarcophagus.start(data)
 tunnels.start(data)
+
+-- BARROWS_INV is populated before Bank All or Take All empties it. Capture
+-- the server update immediately so a quick claim cannot skip the reward.
+local function onLootInventory(event)
+    if accountKey and event.inv.configName == "BARROWS_INV" then
+        loot.capture(data, save)
+    end
+end
+Event.InventoryAdded.Subscribe("barrowsLootAdded", onLootInventory)
+Event.InventoryUpdated.Subscribe("barrowsLootUpdated", onLootInventory)
 
 Event.VarTransmit.Subscribe("barrowsTunnelKills", function(event)
     local configName = event.var.configName
@@ -590,9 +613,14 @@ Event.GameStateChanged.Subscribe("barrowsTunnelGameState", function(event)
 end)
 Event.ContentLayerReady.Subscribe("barrowsTunnelContent", function(event)
     hideInfoTip()
+    if hasContentUi() then contentRoot:Destroy() end
     contentParent = event.component
     contentRoot = nil
     contentDirty = true
+    seenWidth, seenHeight = contentParent.width, contentParent.height
+    resizeWait = 0
+    -- The Hub has already cleared this layer, so redraw it immediately.
+    buildContent()
 end)
 Event.Logic.Subscribe("barrowsTunnelLogic", function()
     setAccount(currentAccount())
@@ -625,15 +653,35 @@ Event.Logic.Subscribe("barrowsTunnelLogic", function()
         local actions = pending
         pending = {}
         for _, action in ipairs(actions) do action() end
+        if data.chestOpen then loot.capture(data, save) end
     else
         pending = {}
     end
+    -- The Hub can transiently miss a child lookup while resizing. Keep the
+    -- dock until the interface closes or ContentLayerReady replaces it.
     if contentParent and not ui.Interfaces:GetInterface(contentParent.interfaceID) then
         hideInfoTip()
         contentParent, contentRoot = nil, nil
     end
-    if contentParent and (contentDirty or contentRoot.width ~= contentParent.width
-        or contentRoot.height ~= contentParent.height) then buildContent() end
+    if contentParent then
+        local width, height = contentParent.width, contentParent.height
+        if width ~= seenWidth or height ~= seenHeight then
+            seenWidth, seenHeight = width, height
+            resizeWait = resizeQuietTicks
+            contentDirty = true
+            -- Keep an owned dock visible while the Hub changes its size.
+            if contentRoot and width > 0 and height > 0 then
+                contentRoot:SetSize(width, height)
+            end
+        elseif resizeWait > 0 then
+            resizeWait = resizeWait - 1
+        end
+        if not contentRoot or (resizeWait == 0 and (contentDirty
+            or contentRoot.width ~= width or contentRoot.height ~= height)) then
+            buildContent()
+        end
+    end
+    loot.update(data.lootRuns)
     mounds.update()
     puzzle.update()
     sarcophagus.update()
@@ -645,6 +693,8 @@ log("Breaking into the crypt!")
 -- Release event hooks and restore the game's Barrows panel on unload.
 function PluginShutdown()
     barrowsPanel.restore()
+    Event.InventoryAdded.Unsubscribe("barrowsLootAdded")
+    Event.InventoryUpdated.Unsubscribe("barrowsLootUpdated")
     Event.VarTransmit.Unsubscribe("barrowsTunnelKills")
     Event.MiniMenuEntrySelected.Unsubscribe("barrowsTunnelSarcophagus")
     Event.GameStateChanged.Unsubscribe("barrowsTunnelGameState")
@@ -655,5 +705,7 @@ function PluginShutdown()
     sarcophagus.stop()
     tunnels.stop()
     hideInfoTip()
+    loot.destroy()
     if contentRoot then contentRoot:Destroy() end
+    hoverTip.stop()
 end
