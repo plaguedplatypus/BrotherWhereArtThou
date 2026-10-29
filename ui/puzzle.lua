@@ -17,7 +17,15 @@ local answers = {
 }
 
 local highlightedSlot, highlightedModel, normalEnvironment
-local marker
+local marker, helpButton
+local helpRequested = false
+local shownSequence
+
+local function attached(component)
+    return component and ui.Interfaces:GetInterface(component.interfaceID)
+        and component.parent
+        and component.parent:GetChild(component.categoryID, component.dynamicID) == component
+end
 
 -- Restore the game's original lighting when the puzzle closes or changes.
 local function clear()
@@ -30,19 +38,51 @@ local function clear()
     highlightedSlot, highlightedModel, normalEnvironment = nil, nil, nil
 end
 
--- Light the correct model and point to it with a chevron, so the answer can
--- still be found without relying on colour. The model remains clickable.
+-- Let the player try the sequence first. The answer is only read after HELP
+-- is pressed, and a new puzzle requires a new request.
 function puzzle.update()
-    if marker and not ui.Interfaces:GetInterface(marker.interfaceID) then marker = nil end
+    if marker and not attached(marker) then marker = nil end
+    if helpButton and not attached(helpButton) then helpButton = nil end
     local window = ui.Interfaces:GetComponent(id.Component.BARROWS_PUZZLE__MAINMODAL_WINDOW)
     if not window or not window.visibleGlobal then
         clear()
         if marker then marker.hidden = true end
+        if helpButton then helpButton.hidden = true end
+        helpRequested, shownSequence = false, nil
         return
     end
 
     local sequence = ui.Interfaces:GetComponent(id.Component.BARROWS_PUZZLE__BARROWS_SEQ1)
-    local answerID = sequence and answers[sequence.modelID1]
+    local sequenceID = sequence and sequence.modelID1
+    if sequenceID ~= shownSequence then
+        clear()
+        if marker then marker.hidden = true end
+        helpRequested, shownSequence = false, sequenceID
+    end
+
+    if not helpButton then
+        local parent = ui.Interfaces:GetComponent(id.Component.TOPLEVEL_V2__PLUGIN_BUILD_LAYER_TOP)
+        if parent then
+            helpButton = ui.Button.new(parent, 1)
+            helpButton:SetSize(74, 24)
+            helpButton.stylesheetID = id.StyleSheet.BUTTON_DEFAULT
+            helpButton.label = "HELP"
+            helpButton:Subscribe(ui.Hook.ONBUTTONPRESSED, function()
+                helpRequested = true
+            end)
+        end
+    end
+    if helpButton then
+        local point = window.xyGlobal
+        local origin = helpButton.parent.xyGlobal
+        -- The bottom-right margin is clear of the three answer choices.
+        helpButton:SetPos(math.floor(point.x - origin.x + window.width - 84),
+            math.floor(point.y - origin.y + window.height - 32))
+        helpButton.hidden = false
+    end
+    if not helpRequested then return end
+
+    local answerID = sequenceID and answers[sequenceID]
     local answer, answerSlot
     if answerID then
         for _, slot in ipairs(answerSlots) do
@@ -91,7 +131,9 @@ end
 function puzzle.stop()
     clear()
     if marker then marker:Destroy() end
-    marker = nil
+    if helpButton then helpButton:Destroy() end
+    marker, helpButton = nil, nil
+    helpRequested, shownSequence = false, nil
 end
 
 return puzzle

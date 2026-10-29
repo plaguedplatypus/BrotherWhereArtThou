@@ -53,7 +53,9 @@ local centreDoors = {
 }
 local mazeCentre = CoordGrid.new(0, Vector3.new(3551 * 512, 0, 9694 * 512))
 
-local run, states, target, room, route, pendingDoor
+local run, states, target, room, nextDoor, pendingDoor
+local marker, markerTime = nil, 0
+local blinkPeriod = 0.4
 
 -- Limit route work to a Barrows run inside the underground map area.
 local function playerInTunnel()
@@ -67,7 +69,7 @@ local function playerInTunnel()
     return player
 end
 
--- Follow the loaded floor height so the route sits above tunnel tiles.
+-- Place the door marker at the height of the loaded tunnel floor.
 local function floorPoint(tile, level)
     local x, z = (tile.x + 0.5) * 512, (tile.z + 0.5) * 512
     local height, available = World.GetGroundHeight(level, x, z)
@@ -110,8 +112,8 @@ for _, passage in ipairs(passages) do
     passage.length = passageLength(passage)
 end
 
--- Find the shortest known-open passage route from an outer room to the puzzle
--- door's room. A corridor containing the player can be excluded separately.
+-- Find the first door on the shortest known-open route to the puzzle door's
+-- room. A corridor containing the player can be excluded separately.
 local function routeFrom(start, excluded)
     local costs, previous, visited = { [start] = 0 }, {}, {}
 
@@ -145,26 +147,14 @@ local function routeFrom(start, excluded)
     end
     if not costs[target.room] then return nil end
 
-    local steps, index = {}, target.room
+    local first, index = nil, target.room
     while index ~= start do
         local step = previous[index]
-        table.insert(steps, 1, { from = step.room, to = index, passage = step.passage })
+        local passage = step.passage
+        first = passage.points[step.room == passage.from and 1 or #passage.points]
         index = step.room
     end
-
-    local points = {}
-    for _, step in ipairs(steps) do
-        local passage = step.passage
-        if step.from == passage.from then
-            for _, point in ipairs(passage.points) do points[#points + 1] = point end
-        else
-            for point = #passage.points, 1, -1 do
-                points[#points + 1] = passage.points[point]
-            end
-        end
-        points[#points + 1] = rooms[step.to]
-    end
-    return points, costs[target.room]
+    return first or target, costs[target.room]
 end
 
 -- Identify the bypass corridors, whose middle tiles are not in any room.
@@ -183,49 +173,31 @@ local function outerCorridor(tile)
     end
 end
 
--- Start at either end of a bypass corridor or at the nearest outer room,
--- then project the route onto the visible floor.
-local function buildRoute(player)
+-- From an outer corridor, compare both exits; otherwise mark the first door
+-- on the room route. The chest entrance itself is marked from its adjacent room.
+local function findDoor(player)
     local tile = player.coordGrid
     local passage, corridorPoint = outerCorridor(tile)
-    local points
 
     if passage then
-        -- When already in an outer corridor, route from either end without
-        -- crossing back through its wall or sending the line behind the player.
-        local bestCost
+        -- When already in an outer corridor, compare the routes from both ends.
+        local bestCost, choice
         for _, endRoom in ipairs({ passage.from, passage.to }) do
-            local rest, cost = routeFrom(endRoom, passage.id)
-            if rest then
+            local _, cost = routeFrom(endRoom, passage.id)
+            if cost then
                 local outer = passage.points[endRoom == passage.from and 2 or 3]
                 local door = passage.points[endRoom == passage.from and 1 or 4]
                 local total = distance(corridorPoint, outer) + distance(outer, door)
                     + distance(door, rooms[endRoom]) + cost
                 if not bestCost or total < bestCost then
-                    bestCost = total
-                    points = { corridorPoint, outer, door, rooms[endRoom] }
-                    for _, point in ipairs(rest) do points[#points + 1] = point end
+                    bestCost, choice = total, door
                 end
             end
         end
-    else
-        local start = nearestRoom(tile)
-        if not start then return nil end
-        points = routeFrom(start)
+        return choice
     end
-    if not points then return nil end
-
-    local positions = {}
-    for _, point in ipairs(points) do
-        local position = floorPoint(point, player.coordGrid.level)
-        -- Fog can leave later corridor tiles without ground height. Keep the
-        -- visible part of the route instead of hiding the whole line.
-        if not position then return #positions > 0 and positions or nil end
-        positions[#positions + 1] = position
-    end
-    local door = floorPoint(target, player.coordGrid.level)
-    if door then positions[#positions + 1] = door end
-    return #positions > 0 and positions or nil
+    local start = nearestRoom(tile)
+    if start then return routeFrom(start) end
 end
 
 -- Group both halves of each door by parent config and read their current lock
@@ -234,7 +206,7 @@ end
 function tunnels.scan()
     local player = playerInTunnel()
     if not player then
-        states, target, room, route, pendingDoor = nil, nil, nil, nil, nil
+        states, target, room, nextDoor, pendingDoor = nil, nil, nil, nil, nil
         return
     end
 
@@ -277,16 +249,28 @@ function tunnels.scan()
             entrance, entranceLetter = door, letter
         end
     end
-    states, room, route = found, nil, nil
+    states, room, nextDoor = found, nil, nil
     target = entranceLetter == pendingDoor and entrance or nil
     pendingDoor = entranceLetter
 end
 
--- Rebuild the route when the player enters another room or corridor tile.
+-- Choose another door when the player enters a room or corridor tile.
 function tunnels.update()
+    if marker and not ui.Interfaces:GetInterface(marker.interfaceID) then marker = nil end
+    if not marker then
+        local parent = ui.Interfaces:GetComponent(id.Component.TOPLEVEL_V2__PLUGIN_BUILD_LAYER_BOTTOM)
+        if parent then
+            marker = ui.Sprite.new(parent, 1)
+            marker:SetSize(38, 28)
+            marker.spriteID = id.Sprite.WALK_MARKER_DEFAULT
+            marker.colour = Vector4.new(0.2, 1, 0.3, 1)
+            marker.clickthrough = true
+            marker.hidden = true
+        end
+    end
     local player = playerInTunnel()
     if not player or not target then
-        room, route = nil, nil
+        room, nextDoor = nil, nil
         return
     end
     local tile = player.coordGrid
@@ -295,68 +279,47 @@ function tunnels.update()
         or nearestRoom(tile)
     if current == room then return end
     room = current
-    route = current and buildRoute(player) or nil
+    nextDoor = current and findDoor(player) or nil
 end
 
--- Start at the player's feet and draw a floor ribbon; DrawLine's pixel
--- width is capped and can look too thin as the camera pulls back.
-local function draw()
-    if not route then return end
+-- Flash the game's walk chevron above the next door while it is on screen.
+local function draw(drawEvent)
+    if not marker then return end
+    marker.hidden = true
+    if not nextDoor then return end
     local player = playerInTunnel()
     if not player then return end
-    local start = floorPoint({ x = player.coordGrid.x, z = player.coordGrid.z },
-        player.coordGrid.level)
-    if not start then return end
-
-    local positions = { start }
-    for _, point in ipairs(route) do positions[#positions + 1] = point end
-
-    local ribbon, tris = {}, {}
-    for index = 1, #positions - 1 do
-        local from, to = positions[index], positions[index + 1]
-        local dx, dz = to.x - from.x, to.z - from.z
-        local length = math.sqrt(dx * dx + dz * dz)
-        if length > 0 then
-            local offsetX, offsetZ = -dz * 16 / length, dx * 16 / length
-            local first = #ribbon
-            ribbon[first + 1] = Vector3.new(from.x + offsetX, from.y, from.z + offsetZ)
-            ribbon[first + 2] = Vector3.new(from.x - offsetX, from.y, from.z - offsetZ)
-            ribbon[first + 3] = Vector3.new(to.x + offsetX, to.y, to.z + offsetZ)
-            ribbon[first + 4] = Vector3.new(to.x - offsetX, to.y, to.z - offsetZ)
-            tris[#tris + 1] = first
-            tris[#tris + 1] = first + 1
-            tris[#tris + 1] = first + 2
-            tris[#tris + 1] = first + 1
-            tris[#tris + 1] = first + 3
-            tris[#tris + 1] = first + 2
-        end
+    local mapWorld = ui.Interfaces:GetComponent(id.Component.WORLDMAP_V2__GAME_WORLD)
+    if mapWorld and mapWorld.visibleGlobal then return end
+    local position = floorPoint(nextDoor, player.coordGrid.level)
+    if not position then return end
+    local point = ScreenConvert.Vector3ToScreen(
+        Vector3.new(position.x, position.y + 240, position.z))
+    if not point then return end
+    local parent = marker.parent
+    if not parent then return end
+    local origin = parent.xyGlobal
+    local x, y = point.x - origin.x, point.y - origin.y
+    if x < 19 or x >= parent.width - 19 or y < 28 or y >= parent.height then
+        return
     end
-    if #tris > 0 then
-        ShapeList.Draw({
-            shapePositions = ribbon,
-            shapeTris = tris,
-            colour = 0xF4C15CCC,
-            ignoreDepth = false
-        })
-    end
-    ShapeList.DrawLine({
-        positions = positions,
-        colour = 0xF4C15CDD,
-        lineWidth = 5,
-        ignoreDepth = false
-    })
+    markerTime = (markerTime + drawEvent.timeDeltaSecs) % blinkPeriod
+    marker:SetPos(math.floor(x - 19), math.floor(y - 28))
+    marker.hidden = markerTime >= blinkPeriod / 2
 end
 
--- Read the shared tunnel choice and draw the route each frame.
+-- Read the shared tunnel choice and draw its next-door marker each frame.
 function tunnels.start(data)
     run = data
-    Event.Draw.Subscribe("barrowsTunnelRoute", draw)
+    Event.Draw.Subscribe("barrowsTunnelDoor", draw)
 end
 
--- Remove the draw hook and forget door states when the plugin unloads.
+-- Remove the marker and forget door states when the plugin unloads.
 function tunnels.stop()
-    Event.Draw.Unsubscribe("barrowsTunnelRoute")
-    states, target, room, route, pendingDoor = nil, nil, nil, nil, nil
+    Event.Draw.Unsubscribe("barrowsTunnelDoor")
+    if marker then marker:Destroy() end
+    marker = nil
+    states, target, room, nextDoor, pendingDoor = nil, nil, nil, nil, nil
 end
 
 return tunnels

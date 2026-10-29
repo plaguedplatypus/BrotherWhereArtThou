@@ -53,7 +53,6 @@ local function currentAccount()
 end
 
 -- Reset the shared table in place because every world overlay holds it.
--- Keep the old unscoped save untouched: it cannot be assigned to an account.
 local function loadAccount(key)
     data.selected, data.slain = nil, {}
     data.showAkrisae, data.showLinza = false, false
@@ -66,11 +65,11 @@ local function loadAccount(key)
     if type(saved) ~= "table" then return end
     if names[saved.selected] then data.selected = saved.selected end
     -- Keep quest-derived visibility while the game reloads quest status so
-    -- active marks survive. Ignore saves made with the removed manual toggles.
-    if saved.showAkrisae == true and saved.manualAkrisae ~= true then
+    -- active marks survive.
+    if saved.showAkrisae == true then
         data.showAkrisae = true
     end
-    if saved.showLinza == true and saved.manualLinza ~= true then
+    if saved.showLinza == true then
         data.showLinza = true
     end
     if saved.chestOpen == true then data.chestOpen = true end
@@ -79,12 +78,13 @@ local function loadAccount(key)
         data.linzaKills = math.floor(saved.linzaKills)
     end
     if saved.linzaCounted == true then data.linzaCounted = true end
-    -- Persist only item IDs and quantities, never inventory proxy objects.
+    -- Keep saved items and kill details as plain data, never game proxies.
     if type(saved.lootRuns) == "table" then
         for _, run in ipairs(saved.lootRuns) do
-            if type(run) == "table" then
+            if type(run) == "table" and type(run.items) == "table"
+                and type(run.slain) == "table" then
                 local items = {}
-                for _, item in ipairs(run) do
+                for _, item in ipairs(run.items) do
                     if type(item) == "table" and type(item.id) == "number"
                         and item.id > 0 and item.id % 1 == 0
                         and type(item.count) == "number" and item.count > 0
@@ -92,16 +92,26 @@ local function loadAccount(key)
                         items[#items + 1] = { id = item.id, count = item.count }
                     end
                 end
-                if #items > 0 then data.lootRuns[#data.lootRuns + 1] = items end
+                if #items > 0 then
+                    local entry = {
+                        items = items, slain = {},
+                        showAkrisae = run.showAkrisae == true,
+                        showLinza = run.showLinza == true
+                    }
+                    for id in pairs(names) do
+                        if run.slain[id] == true then entry.slain[id] = true end
+                    end
+                    if run.slain.linza == true then entry.slain.linza = true end
+                    data.lootRuns[#data.lootRuns + 1] = entry
+                end
             end
         end
     end
     data.lootCaptured = saved.lootCaptured == true
-    -- Older checkbox callbacks could store 0/1 instead of booleans.
-    if saved.showLinzaKC == false or saved.showLinzaKC == 0 then
+    if saved.showLinzaKC == false then
         data.showLinzaKC = false
     end
-    if saved.showCombatStyles == false or saved.showCombatStyles == 0 then
+    if saved.showCombatStyles == false then
         data.showCombatStyles = false
     end
     if type(saved.slain) == "table" then
@@ -192,6 +202,9 @@ end
 
 -- Reset the run after the chest closes, keeping Linza KC and chest history.
 local function clearRun()
+    -- Inventory updates can arrive before the last kill flag is reconciled.
+    -- Save the final slain list before resetting the live run.
+    loot.recordSlain(data)
     data.selected = nil
     data.slain = {}
     data.chestOpen = false

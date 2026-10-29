@@ -10,6 +10,33 @@ local scrollY = { 0, 0 }
 local shownWidth, shownHeight
 local resizeWait = 0
 local scrollStep = 36
+local bosses = {
+    { id = "ahrim", name = "Ahrim" },
+    { id = "torag", name = "Torag" },
+    { id = "dharok", name = "Dharok" },
+    { id = "verac", name = "Verac" },
+    { id = "guthan", name = "Guthan" },
+    { id = "karil", name = "Karil" },
+    { id = "akrisae", name = "Akrisae" },
+    { id = "linza", name = "Linza" }
+}
+
+local function updateSlain(entry, run)
+    local changed = false
+    for _, boss in ipairs(bosses) do
+        if run.slain[boss.id] and not entry.slain[boss.id] then
+            entry.slain[boss.id] = true
+            changed = true
+        end
+    end
+    local showAkrisae = run.showAkrisae or entry.slain.akrisae == true
+    local showLinza = run.showLinza or entry.slain.linza == true
+    if entry.showAkrisae ~= showAkrisae or entry.showLinza ~= showLinza then
+        entry.showAkrisae, entry.showLinza = showAkrisae, showLinza
+        changed = true
+    end
+    return changed
+end
 
 -- Keep the largest quantity seen for each reward while the chest is open.
 -- Bank All and Take All remove items from BARROWS_INV, so later snapshots
@@ -33,18 +60,19 @@ function loot.capture(run, save)
     end
     if not next(found) then return end
 
-    local items
+    local entry
     if run.lootCaptured then
-        items = run.lootRuns[#run.lootRuns]
-        if not items then return end -- Loot was cleared during this chest visit.
+        entry = run.lootRuns[#run.lootRuns]
+        if not entry then return end -- Loot was cleared during this chest visit.
     else
-        items = {}
-        run.lootRuns[#run.lootRuns + 1] = items
+        entry = { items = {}, slain = {} }
+        run.lootRuns[#run.lootRuns + 1] = entry
         run.lootCaptured = true
         loot.resetScroll()
     end
 
-    local changed = #items == 0
+    local items = entry.items
+    local changed = updateSlain(entry, run) or #items == 0
     for _, item in ipairs(items) do
         local count = found[item.id]
         if count and count > item.count then
@@ -65,6 +93,16 @@ function loot.capture(run, save)
     end
 end
 
+-- A final kill update may follow the chest inventory event. Keep only
+-- confirmed kills, and never add a history row for an unrecorded quick loot.
+function loot.recordSlain(run)
+    if not run.lootCaptured then return end
+    local entry = run.lootRuns[#run.lootRuns]
+    if entry and updateSlain(entry, run) then
+        dirty = true
+    end
+end
+
 -- Start a different character or a new chest at the top of both lists.
 function loot.resetScroll()
     scrollY[1], scrollY[2] = 0, 0
@@ -75,7 +113,7 @@ function loot.resetScroll()
     end
 end
 
--- PrettyUI owns the tab pages and scrollbars; the loot slots have no drag hooks.
+-- PrettyUI owns the tab pages and scrollbars.
 local function clearTabs()
     if not tabs then return end
     hoverTip.hide()
@@ -108,21 +146,22 @@ local function forget()
 end
 
 -- One canvas draws empty and filled slot backgrounds without native children.
--- Only real items need a sprite and mouse hooks; none need drag listeners.
+-- Only real items need a sprite and mouse hooks.
 local function gridHeight(count, columns)
     local rows = math.ceil(count / columns)
     return rows * 40 + math.max(0, rows - 1) * 2
 end
 
+local function scroll(page, delta)
+    hoverTip.hide()
+    local previous = page.scrollY
+    page:ScrollBy(delta * scrollStep)
+    return page.scrollY == previous
+end
+
 local function addGrid(page, canvas, items, columns, top)
     local slotSize, gap, inset = 40, 2, 14
     local rows = math.ceil(#items / columns)
-    local function onWheel(_, delta)
-        hoverTip.hide()
-        local previous = page.scrollY
-        page:ScrollBy(delta * scrollStep)
-        return page.scrollY == previous
-    end
     for index = 1, rows * columns do
         local x = inset + ((index - 1) % columns) * (slotSize + gap)
         local y = top + math.floor((index - 1) / columns) * (slotSize + gap)
@@ -146,7 +185,9 @@ local function addGrid(page, canvas, items, columns, top)
 
                 local label = (obj.name or "Unknown item") .. " x" .. item.count
                 -- Hovered slots must forward wheel input to their scrollable tab.
-                slot:Subscribe(ui.Hook.ONSCROLLWHEEL, onWheel)
+                slot:Subscribe(ui.Hook.ONSCROLLWHEEL, function(_, delta)
+                    return scroll(page, delta)
+                end)
                 slot:Subscribe(ui.Hook.ONMOUSEOVER, function()
                     -- A scrolled child's xyGlobal does not reflect the viewport offset.
                     local point = page.viewport.xyGlobal
@@ -169,7 +210,7 @@ end
 local function combinedItems()
     local items, byId = {}, {}
     for runIndex = #runs, 1, -1 do
-        for _, item in ipairs(runs[runIndex]) do
+        for _, item in ipairs(runs[runIndex].items) do
             local total = byId[item.id]
             if total then
                 total.count = total.count + item.count
@@ -181,6 +222,20 @@ local function combinedItems()
         end
     end
     return items
+end
+
+local function runTitle(entry, index)
+    local title = "Run " .. index
+    local slain = entry.slain
+    local count = 0
+    for _, boss in ipairs(bosses) do
+        if slain[boss.id] then count = count + 1 end
+    end
+    if count == 1 and slain.linza then return title .. "  -  Linza Run" end
+
+    local total = 6 + ((entry.showAkrisae or slain.akrisae) and 1 or 0)
+        + ((entry.showLinza or slain.linza) and 1 or 0)
+    return title .. "  -  Brothers slain: " .. count .. "/" .. total
 end
 
 -- Rebuild the two pages when loot or the window width changes.
@@ -208,8 +263,8 @@ local function build()
     else
         local cols = math.min(6, columns)
         local contentHeight = 4
-        for _, items in ipairs(runs) do
-            contentHeight = contentHeight + 24 + gridHeight(#items, cols) + 24
+        for _, entry in ipairs(runs) do
+            contentHeight = contentHeight + 24 + gridHeight(#entry.items, cols) + 24
         end
         contentHeight = contentHeight - 24 + 14
         local canvas = ui.Canvas.new(perRun.content)
@@ -217,9 +272,27 @@ local function build()
         canvas.clickthrough = true
         local y = 4
         for index = #runs, 1, -1 do
-            local items = runs[index]
-            perRun:AddTitle({ text = "Run " .. index, y = y, height = 22 })
-            y = addGrid(perRun, canvas, items, cols, y + 24)
+            local entry = runs[index]
+            local title = perRun:AddTitle({
+                text = runTitle(entry, index), y = y, height = 22
+            })
+            title.enabled = true
+            title:Subscribe(ui.Hook.ONSCROLLWHEEL, function(_, delta)
+                return scroll(perRun, delta)
+            end)
+            title:Subscribe(ui.Hook.ONMOUSEOVER, function()
+                local point = perRun.viewport.xyGlobal
+                hoverTip.showSlain(point.x + title.x + 70,
+                    point.y + title.y - perRun.scrollY,
+                    150, title.height, bosses, entry.slain,
+                    entry.showAkrisae, entry.showLinza)
+                return true
+            end)
+            title:Subscribe(ui.Hook.ONMOUSELEAVE, function()
+                hoverTip.hide()
+                return true
+            end)
+            y = addGrid(perRun, canvas, entry.items, cols, y + 24)
             if index > 1 then
                 perRun:AddDivider({ y = y - 22 })
                 y = y + 24
