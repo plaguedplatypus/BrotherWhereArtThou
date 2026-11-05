@@ -118,7 +118,8 @@ local function loadAccount(key)
     end
 end
 
-local contentParent, contentRoot
+local contentParent, contentRoot, contentView
+local contentScroll = 0
 local page = "overview"
 local pending = {}
 local contentDirty = true
@@ -149,6 +150,7 @@ local function setAccount(key)
     loadAccount(key)
     pending = {}
     page = "overview"
+    contentScroll = 0
     syncPending = key ~= nil
     syncTicks = 0
     akrisaeQuestKnown, linzaQuestKnown = false, false
@@ -484,12 +486,26 @@ local function buildContent()
     if not contentParent then return end
     if contentParent.width < 1 or contentParent.height < 1 then return end
     hoverTip.hide()
+    if contentView then
+        contentView:Destroy()
+        contentView = nil
+    end
     if contentRoot then contentRoot:Destroy() end
     local root = ui.Layer.new(contentParent)
     root:SetSize(contentParent.width, contentParent.height)
     contentRoot = root
-    local width = contentParent.width
-    local title = text(root,
+    -- The Hub clips a short dock. Scroll the page while its navigation stays put.
+    local view = prettyui.SimpleView.new(root, {
+        x = 0, y = 0, width = contentParent.width,
+        height = math.max(1, contentParent.height - 32), scrollStep = 24
+    })
+    contentView = view
+    local pageHeight = page == "settings" and 214 or 244
+    view:SetContentHeight(math.max(view.root.height, pageHeight))
+    -- SimpleView's scrollbar overlays the right edge of short pages.
+    local width = view.contentWidth - (pageHeight > view.root.height and 16 or 0)
+    local owner = view.content
+    local title = text(owner,
         page == "settings" and "SETTINGS" or "BROTHER WHERE ART THOU",
         8, 5, width - 16, 18)
     title.font = id.Font.CINZEL_12PT_BOLD
@@ -497,10 +513,11 @@ local function buildContent()
     title.alignVertical = ui.AlignMode.CENTRE
     title.maxLines = 1
     if page == "settings" then
-        settings.build(root, width, data, queue, save)
+        settings.build(owner, width, data, queue, save)
     else
-        overviewPage(root, width)
+        overviewPage(owner, width)
     end
+    view:SetScrollPosition(contentScroll)
 
     -- The backpack opens a separate loot window; the settings cog still
     -- changes pages inside the Hub and becomes a back arrow there.
@@ -522,9 +539,10 @@ local function buildContent()
     nav(4, id.Sprite.RS3_MENU_ICON_BACKPACK_NORMAL, function()
         loot.open(data.lootRuns)
     end)
-    nav(width - 30, page == "settings" and id.Sprite.RS3_ICON_BACK_32PX_0
+    nav(contentParent.width - 30, page == "settings" and id.Sprite.RS3_ICON_BACK_32PX_0
         or id.Sprite.RS3_ICON_PLUGIN_HUB_SETTINGS_ACTIVE, function()
         page = page == "settings" and "overview" or "settings"
+        contentScroll = 0
         contentDirty = true
     end)
     contentDirty = false
@@ -613,9 +631,15 @@ Event.GameStateChanged.Subscribe("barrowsTunnelGameState", function(event)
 end)
 Event.ContentLayerReady.Subscribe("barrowsTunnelContent", function(event)
     hoverTip.hide()
-    if hasContentUi() then contentRoot:Destroy() end
+    if hasContentUi() then
+        if contentView then
+            contentScroll = contentView.scrollY
+            contentView:Destroy()
+        end
+        contentRoot:Destroy()
+    end
     contentParent = event.component
-    contentRoot = nil
+    contentRoot, contentView = nil, nil
     contentDirty = true
     seenWidth, seenHeight = contentParent.width, contentParent.height
     resizeWait = 0
@@ -623,6 +647,7 @@ Event.ContentLayerReady.Subscribe("barrowsTunnelContent", function(event)
     buildContent()
 end)
 Event.Logic.Subscribe("barrowsTunnelLogic", function()
+    if contentView and hasContentUi() then contentScroll = contentView.scrollY end
     setAccount(currentAccount())
     if accountKey then
         local creatures = barrowsPanel.read()
@@ -661,7 +686,7 @@ Event.Logic.Subscribe("barrowsTunnelLogic", function()
     -- dock until the interface closes or ContentLayerReady replaces it.
     if contentParent and not ui.Interfaces:GetInterface(contentParent.interfaceID) then
         hoverTip.hide()
-        contentParent, contentRoot = nil, nil
+        contentParent, contentRoot, contentView = nil, nil, nil
     end
     if contentParent then
         local width, height = contentParent.width, contentParent.height
@@ -706,6 +731,7 @@ function PluginShutdown()
     tunnels.stop()
     hoverTip.hide()
     loot.destroy()
+    if contentView then contentView:Destroy() end
     if contentRoot then contentRoot:Destroy() end
     hoverTip.stop()
 end
