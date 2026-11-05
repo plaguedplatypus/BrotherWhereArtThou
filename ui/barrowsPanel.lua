@@ -11,7 +11,7 @@ local function read()
         or header.type ~= ui.ComponentType.LABEL
         or brothers.type ~= ui.ComponentType.LABEL
         or creatures.type ~= ui.ComponentType.LABEL
-        or header.content ~= "Brothers slain:" then return nil, nil end
+        or header.content ~= "Brothers slain:" then return nil end
 
     if header.visibleGlobal and not panel.hidden then
         panel.hidden = true
@@ -19,8 +19,8 @@ local function read()
     end
     -- After looting, the hidden game panel can leave 9999 in this field.
     -- Keep the last real count until the game starts reporting a new run.
-    if creatures.content == "9999" then return brothers.content, nil end
-    return brothers.content, creatures.content
+    if creatures.content == "9999" then return nil end
+    return creatures.content
 end
 
 -- Return control of the built-in panel to the game when the plugin unloads.

@@ -66,18 +66,14 @@ local function loadAccount(key)
     if names[saved.selected] then data.selected = saved.selected end
     -- Keep quest-derived visibility while the game reloads quest status so
     -- active marks survive.
-    if saved.showAkrisae == true then
-        data.showAkrisae = true
-    end
-    if saved.showLinza == true then
-        data.showLinza = true
-    end
-    if saved.chestOpen == true then data.chestOpen = true end
+    data.showAkrisae = saved.showAkrisae == true
+    data.showLinza = saved.showLinza == true
+    data.chestOpen = saved.chestOpen == true
     if type(saved.linzaKills) == "number" and saved.linzaKills >= 0
         and saved.linzaKills < math.huge then
         data.linzaKills = math.floor(saved.linzaKills)
     end
-    if saved.linzaCounted == true then data.linzaCounted = true end
+    data.linzaCounted = saved.linzaCounted == true
     -- Keep saved items and kill details as plain data, never game proxies.
     if type(saved.lootRuns) == "table" then
         for _, run in ipairs(saved.lootRuns) do
@@ -108,12 +104,8 @@ local function loadAccount(key)
         end
     end
     data.lootCaptured = saved.lootCaptured == true
-    if saved.showLinzaKC == false then
-        data.showLinzaKC = false
-    end
-    if saved.showCombatStyles == false then
-        data.showCombatStyles = false
-    end
+    data.showLinzaKC = saved.showLinzaKC ~= false
+    data.showCombatStyles = saved.showCombatStyles ~= false
     if type(saved.slain) == "table" then
         for id in pairs(names) do
             if saved.slain[id] == true then data.slain[id] = true end
@@ -369,11 +361,6 @@ local function redLine(parent, x, y, width, height, invert)
     return line
 end
 
--- Release quest tooltips before their dock anchors are rebuilt.
-local function hideInfoTip()
-    hoverTip.hide()
-end
-
 -- Quest requirements use PrettyUI's compact game-style tooltip frame.
 local function infoIcon(root, width, y, name, message)
     local icon = ui.Layer.new(root)
@@ -496,7 +483,7 @@ end
 local function buildContent()
     if not contentParent then return end
     if contentParent.width < 1 or contentParent.height < 1 then return end
-    hideInfoTip()
+    hoverTip.hide()
     if contentRoot then contentRoot:Destroy() end
     local root = ui.Layer.new(contentParent)
     root:SetSize(contentParent.width, contentParent.height)
@@ -625,7 +612,7 @@ Event.GameStateChanged.Subscribe("barrowsTunnelGameState", function(event)
     end
 end)
 Event.ContentLayerReady.Subscribe("barrowsTunnelContent", function(event)
-    hideInfoTip()
+    hoverTip.hide()
     if hasContentUi() then contentRoot:Destroy() end
     contentParent = event.component
     contentRoot = nil
@@ -638,7 +625,7 @@ end)
 Event.Logic.Subscribe("barrowsTunnelLogic", function()
     setAccount(currentAccount())
     if accountKey then
-        local _, creatures = barrowsPanel.read()
+        local creatures = barrowsPanel.read()
         if creatures ~= nil and creatures ~= creatureCount then
             creatureCount = creatures
             contentDirty = true
@@ -673,7 +660,7 @@ Event.Logic.Subscribe("barrowsTunnelLogic", function()
     -- The Hub can transiently miss a child lookup while resizing. Keep the
     -- dock until the interface closes or ContentLayerReady replaces it.
     if contentParent and not ui.Interfaces:GetInterface(contentParent.interfaceID) then
-        hideInfoTip()
+        hoverTip.hide()
         contentParent, contentRoot = nil, nil
     end
     if contentParent then
@@ -717,7 +704,7 @@ function PluginShutdown()
     puzzle.stop()
     sarcophagus.stop()
     tunnels.stop()
-    hideInfoTip()
+    hoverTip.hide()
     loot.destroy()
     if contentRoot then contentRoot:Destroy() end
     hoverTip.stop()
