@@ -24,8 +24,10 @@ local function create()
             layer:SetSize(0, 0, 1, 1)
             layer.clickthrough = true
             local anchor = ui.Layer.new(layer)
+            anchor:SetSize(0, 0)
             anchor.hidden = true
-            local frame = prettyui.Tooltip.attach(anchor, layer, { text = "Item" })
+            local frame = prettyui.Tooltip.attach(anchor, layer,
+                { text = "Item", placement = "above", boundsMargin = 0 })
             frame.label.font = id.Font.MUSEO_SANS_11PT_REGULAR
             frame.label.alignHorizontal = ui.AlignMode.CENTRE
             frame.label.alignVertical = ui.AlignMode.CENTRE
@@ -79,22 +81,30 @@ local function createBossRows(bosses)
     end
 end
 
+-- Centre tooltips over their targets, shifting them inward at screen edges.
+-- PrettyUI adds 6 pixels around the anchor, so callers shift it by 3.
+local function place(x, y, width, tipWidth)
+    local origin = overlay.xyGlobal
+    local left = x - origin.x + (width - tipWidth) / 2
+    target:SetPos(math.max(0, math.min(left, overlay.width - tipWidth)),
+        y - origin.y)
+end
+
 -- Measure wrapped text with the font actually drawn, then position the tip
 -- from screen coordinates so scrolled loot slots and dock icons agree.
-function hoverTip.show(x, y, width, height, label, maxWidth)
+function hoverTip.show(x, y, width, label, maxWidth)
     if not create() then return end
     hideBossRows()
     tip.label.hidden = false
     local font = config.Font.MUSEO_SANS_11PT_REGULAR
-    local tipWidth = math.min(maxWidth, math.max(90,
-        font:GetStringWidthMultiline(label, maxWidth - 16, false, false, false) + 24))
+    local tipWidth = math.min(maxWidth, math.max(21,
+        font:GetStringWidthMultiline(label, maxWidth - 16, false, false, false) + 16))
     local textHeight = font:GetStringHeightAndLineCount(label,
         tipWidth - 16, font.baseline, false, false, false)
-    local origin = overlay.xyGlobal
-    target:SetPos(x - origin.x, y - origin.y)
-    target:SetSize(width, height)
+    place(x, y + 3, width, tipWidth)
+    tip.options.placement = "above"
     tip.options.width = tipWidth
-    tip.options.height = textHeight + 16
+    tip.options.height = textHeight + 10
     tip:SetText(label)
     tip:Show()
 end
@@ -117,9 +127,8 @@ function hoverTip.showSlain(x, y, width, height, bosses, slain,
             or Vector4.new(1, 0.90, 0.68, 1)
         row.line.hidden = not slain[boss.id]
     end
-    local origin = overlay.xyGlobal
-    target:SetPos(x - origin.x, y - origin.y)
-    target:SetSize(width, height)
+    place(x, y + height - 3, width, 188)
+    tip.options.placement = "below"
     tip:Show()
 end
 

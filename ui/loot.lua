@@ -192,7 +192,7 @@ local function addGrid(page, canvas, items, columns, top)
                     -- A scrolled child's xyGlobal does not reflect the viewport offset.
                     local point = page.viewport.xyGlobal
                     hoverTip.show(point.x + x, point.y + y - page.scrollY,
-                        slotSize, slotSize, label, 190)
+                        slotSize, label, 190)
                     return true
                 end)
                 slot:Subscribe(ui.Hook.ONMOUSELEAVE, function()

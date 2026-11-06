@@ -6,6 +6,7 @@ local hoverTip = require("ui/hoverTip")
 local loot = require("ui/loot")
 local mounds = require("ui/mounds")
 local puzzle = require("ui/puzzle")
+local ribbonToggle = require("ui/ribbonToggle")
 local sarcophagus = require("ui/sarcophagus")
 local settings = require("ui/settings")
 local tunnels = require("ui/tunnels")
@@ -126,6 +127,7 @@ local contentDirty = true
 local seenWidth, seenHeight
 local resizeWait = 0
 local resizeQuietTicks = 3
+local contentMissingTicks = 0
 local syncPending = true
 local syncTicks = 0
 local akrisaeQuestKnown, linzaQuestKnown = false, false
@@ -375,7 +377,7 @@ local function infoIcon(root, width, y, name, message)
     local label = name .. "<br>" .. message
     icon:Subscribe(ui.Hook.ONMOUSEOVER, function()
         local point = icon.xyGlobal
-        hoverTip.show(point.x, point.y, icon.width, icon.height, label, 190)
+        hoverTip.show(point.x, point.y, icon.width, label, 190)
         return true
     end)
     icon:Subscribe(ui.Hook.ONMOUSELEAVE, function()
@@ -395,12 +397,12 @@ local function divider(root, width, y)
 end
 
 -- Show all brothers, including locked ones, with slain and tunnel marks.
-local function dockBosses(root, width)
-    local cellWidth = math.floor((width - 16) / 3)
+local function dockBosses(root, width, columns, rowOffset)
+    local cellWidth = math.floor((width - 16) / columns)
     local total, slain = 0, 0
     for index, boss in ipairs(dockOrder) do
-        local x = 8 + ((index - 1) % 3) * cellWidth
-        local y = 35 + math.floor((index - 1) / 3) * 18
+        local x = 8 + ((index - 1) % columns) * cellWidth
+        local y = 35 + math.floor((index - 1) / columns) * 18
         local unlocked = boss.id ~= "akrisae" or data.showAkrisae
         unlocked = unlocked and (boss.id ~= "linza" or data.showLinza)
         local selected = unlocked and data.selected == boss.id
@@ -442,32 +444,36 @@ local function dockBosses(root, width)
             redLine(root, x + 7, y + 9, cellWidth - 10, 1)
         end
     end
-    divider(root, width, 91)
-    text(root, "Brothers slain: " .. slain .. "/" .. total, 8, 97, width - 16, 20)
-    text(root, "Creatures slain: " .. (creatureCount or "?"), 8, 118, width - 16, 20)
-    divider(root, width, 140)
+    divider(root, width, 91 + rowOffset)
+    text(root, "Brothers slain: " .. slain .. "/" .. total,
+        8, 97 + rowOffset, width - 16, 20)
+    text(root, "Creatures slain: " .. (creatureCount or "?"),
+        8, 118 + rowOffset, width - 16, 20)
+    divider(root, width, 140 + rowOffset)
 end
 
 -- Show quest status for the optional bosses when the game supplies it.
-local function overviewPage(root, width)
-    dockBosses(root, width)
+local function overviewPage(root, width, columns, rowOffset)
+    dockBosses(root, width, columns, rowOffset)
     local akrisaeStatus = "Unknown"
     if akrisaeQuestKnown then
         akrisaeStatus = data.showAkrisae and "Unlocked" or "Missing quest"
     end
-    text(root, "Akrisae: " .. akrisaeStatus, 8, 146, width - 43, 23)
+    text(root, "Akrisae: " .. akrisaeStatus, 8, 146 + rowOffset, width - 43, 23)
     local linzaStatus = "Unknown"
     if linzaQuestKnown then
         linzaStatus = data.showLinza and "Unlocked" or "Missing quest"
     end
-    text(root, "Linza: " .. linzaStatus, 8, 169, width - 43, 23)
-    divider(root, width, 194)
-    text(root, "Barrows KC: " .. (barrowsCount or "?"), 8, 200, width - 16, 18)
+    text(root, "Linza: " .. linzaStatus, 8, 169 + rowOffset, width - 43, 23)
+    divider(root, width, 194 + rowOffset)
+    text(root, "Barrows KC: " .. (barrowsCount or "?"),
+        8, 200 + rowOffset, width - 16, 18)
     if data.showLinzaKC then
-        text(root, "Linza KC: " .. data.linzaKills, 8, 220, width - 16, 18)
+        text(root, "Linza KC: " .. data.linzaKills,
+            8, 220 + rowOffset, width - 16, 18)
     end
-    infoIcon(root, width, 146, "Akrisae", "Requires Ritual of the Mahjarrat.")
-    infoIcon(root, width, 169, "Linza",
+    infoIcon(root, width, 146 + rowOffset, "Akrisae", "Requires Ritual of the Mahjarrat.")
+    infoIcon(root, width, 169 + rowOffset, "Linza",
         "Requires Kindred Spirits.")
 end
 
@@ -486,6 +492,7 @@ local function buildContent()
     if not contentParent then return end
     if contentParent.width < 1 or contentParent.height < 1 then return end
     hoverTip.hide()
+    ribbonToggle.detach()
     if contentView then
         contentView:Destroy()
         contentView = nil
@@ -500,14 +507,16 @@ local function buildContent()
         height = math.max(1, contentParent.height - 32), scrollStep = 24
     })
     contentView = view
-    local pageHeight = page == "settings" and 214 or 244
+    -- Classic's narrow fixed panel needs another row for the eight brothers.
+    local columns = contentParent.width < 285 and 2 or 3
+    local rowOffset = (math.ceil(#dockOrder / columns) - 3) * 18
+    local pageHeight = page == "settings" and 214 or 244 + rowOffset
     view:SetContentHeight(math.max(view.root.height, pageHeight))
-    -- SimpleView's scrollbar overlays the right edge of short pages.
-    local width = view.contentWidth - (pageHeight > view.root.height and 16 or 0)
+    local width = view.contentWidth
     local owner = view.content
     local title = text(owner,
         page == "settings" and "SETTINGS" or "BROTHER WHERE ART THOU",
-        8, 5, width - 16, 18)
+        8, 5, width - 8, 18)
     title.font = id.Font.CINZEL_12PT_BOLD
     title.colour = Vector4.new(0.95, 0.75, 0.38, 1)
     title.alignVertical = ui.AlignMode.CENTRE
@@ -515,7 +524,7 @@ local function buildContent()
     if page == "settings" then
         settings.build(owner, width, data, queue, save)
     else
-        overviewPage(owner, width)
+        overviewPage(owner, width, columns, rowOffset)
     end
     view:SetScrollPosition(contentScroll)
 
@@ -545,6 +554,7 @@ local function buildContent()
         contentScroll = 0
         contentDirty = true
     end)
+    ribbonToggle.attach(contentParent, queue, hasContentUi, buildContent)
     contentDirty = false
 end
 
@@ -631,6 +641,7 @@ Event.GameStateChanged.Subscribe("barrowsTunnelGameState", function(event)
 end)
 Event.ContentLayerReady.Subscribe("barrowsTunnelContent", function(event)
     hoverTip.hide()
+    ribbonToggle.close()
     if hasContentUi() then
         if contentView then
             contentScroll = contentView.scrollY
@@ -643,6 +654,7 @@ Event.ContentLayerReady.Subscribe("barrowsTunnelContent", function(event)
     contentDirty = true
     seenWidth, seenHeight = contentParent.width, contentParent.height
     resizeWait = 0
+    contentMissingTicks = 0
     -- The Hub has already cleared this layer, so redraw it immediately.
     buildContent()
 end)
@@ -682,13 +694,25 @@ Event.Logic.Subscribe("barrowsTunnelLogic", function()
     else
         pending = {}
     end
-    -- The Hub can transiently miss a child lookup while resizing. Keep the
-    -- dock until the interface closes or ContentLayerReady replaces it.
+    -- A switched Hub page can leave its old parent alive after our dock is
+    -- cleared. A brief child lookup miss during resize should not close it.
     if contentParent and not ui.Interfaces:GetInterface(contentParent.interfaceID) then
         hoverTip.hide()
+        ribbonToggle.close()
         contentParent, contentRoot, contentView = nil, nil, nil
+    elseif contentRoot and not hasContentUi() then
+        contentMissingTicks = contentMissingTicks + 1
+        if contentMissingTicks >= resizeQuietTicks then
+            hoverTip.hide()
+            ribbonToggle.close()
+            contentParent, contentRoot, contentView = nil, nil, nil
+        end
+    else
+        contentMissingTicks = 0
     end
-    if contentParent then
+    -- The Hub can keep this parent alive after switching plugins. Only resize
+    -- our dock while its child still belongs to the active content layer.
+    if contentParent and (not contentRoot or hasContentUi()) then
         local width, height = contentParent.width, contentParent.height
         if width ~= seenWidth or height ~= seenHeight then
             seenWidth, seenHeight = width, height
@@ -731,7 +755,10 @@ function PluginShutdown()
     tunnels.stop()
     hoverTip.hide()
     loot.destroy()
-    if contentView then contentView:Destroy() end
-    if contentRoot then contentRoot:Destroy() end
+    ribbonToggle.close()
+    if hasContentUi() then
+        if contentView then contentView:Destroy() end
+        contentRoot:Destroy()
+    end
     hoverTip.stop()
 end
