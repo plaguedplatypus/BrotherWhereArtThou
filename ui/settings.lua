@@ -31,7 +31,7 @@ function settings.build(root, width, run, queue, save)
         end)
 
     local reset = ui.Button.new(root)
-    reset:SetPos(8, 112)
+    reset:SetPos(8, 105)
     reset:SetSize(width - 16, 26)
     reset.stylesheetID = id.StyleSheet.BUTTON_DEFAULT
     reset.label = "Reset Linza KC"
