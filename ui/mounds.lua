@@ -1,15 +1,17 @@
+local bosses = require("barrows/bosses").byId
+
 local mounds = {}
 
 local moundOrder = { "verac", "dharok", "ahrim", "torag", "guthan", "karil" }
 local labelMounds = {
-    { id = "verac", name = "Verac", mound = "verac", style = "melee" },
-    { id = "akrisae", name = "Akrisae", mound = "verac", style = "magic" },
-    { id = "dharok", name = "Dharok", mound = "dharok", style = "melee" },
-    { id = "ahrim", name = "Ahrim", mound = "ahrim", style = "magic" },
-    { id = "linza", name = "Linza", mound = "ahrim", style = "melee" },
-    { id = "torag", name = "Torag", mound = "torag", style = "melee" },
-    { id = "guthan", name = "Guthan", mound = "guthan", style = "melee" },
-    { id = "karil", name = "Karil", mound = "karil", style = "ranged" }
+    { id = "verac", mound = "verac", style = "melee" },
+    { id = "akrisae", mound = "verac", style = "magic" },
+    { id = "dharok", mound = "dharok", style = "melee" },
+    { id = "ahrim", mound = "ahrim", style = "magic" },
+    { id = "linza", mound = "ahrim", style = "melee" },
+    { id = "torag", mound = "torag", style = "melee" },
+    { id = "guthan", mound = "guthan", style = "melee" },
+    { id = "karil", mound = "karil", style = "ranged" }
 }
 local styleSprites = {
     melee = id.Sprite.HITMARK_ICON_MELEE,
@@ -120,7 +122,7 @@ local function buildLabels()
         local name = ui.Text.new(tag)
         name:SetPos(15, 0)
         name:SetSize(73, 22)
-        name.content = entry.name
+        name.content = bosses[entry.id].name
         name.font = id.Font.MENU_FONT_SMALL
         name:AlignTo(ui.AlignMode.CENTRE)
         name.maxLines = 1

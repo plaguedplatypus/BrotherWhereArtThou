@@ -1,3 +1,4 @@
+local bosses = require("barrows/bosses").displayOrder
 local hoverTip = require("ui/hoverTip")
 
 local loot = {}
@@ -10,100 +11,12 @@ local scrollY = { 0, 0 }
 local shownWidth, shownHeight
 local resizeWait = 0
 local scrollStep = 36
-local bosses = {
-    { id = "ahrim", name = "Ahrim" },
-    { id = "torag", name = "Torag" },
-    { id = "dharok", name = "Dharok" },
-    { id = "verac", name = "Verac" },
-    { id = "guthan", name = "Guthan" },
-    { id = "karil", name = "Karil" },
-    { id = "akrisae", name = "Akrisae" },
-    { id = "linza", name = "Linza" }
-}
 
-local function updateSlain(entry, run)
-    local changed = false
-    for _, boss in ipairs(bosses) do
-        if run.slain[boss.id] and not entry.slain[boss.id] then
-            entry.slain[boss.id] = true
-            changed = true
-        end
-    end
-    local showAkrisae = run.showAkrisae or entry.slain.akrisae == true
-    local showLinza = run.showLinza or entry.slain.linza == true
-    if entry.showAkrisae ~= showAkrisae or entry.showLinza ~= showLinza then
-        entry.showAkrisae, entry.showLinza = showAkrisae, showLinza
-        changed = true
-    end
-    return changed
+function loot.invalidate()
+    dirty = true
 end
 
--- Keep the largest quantity seen for each reward while the chest is open.
--- Bank All and Take All remove items from BARROWS_INV, so later snapshots
--- must not erase the reward already recorded for this run.
-function loot.capture(run, save)
-    local invType = config.Inv.BARROWS_INV
-    local inv = invType and Inventory.Find(invType)
-    -- The live Inv proxy uses isValid; the published property list also names
-    -- valid, but that value is absent in the current client.
-    if not inv or not inv.isValid then return end
-
-    local found, order = {}, {}
-    local slots = inv:GetSlots() or {}
-    for index = 1, inv.slotCount do
-        local slot = slots[index]
-        if slot and slot.obj and slot.obj.id > 0 and slot.count > 0 then
-            local itemId = slot.obj.id
-            if not found[itemId] then order[#order + 1] = itemId end
-            found[itemId] = (found[itemId] or 0) + slot.count
-        end
-    end
-    if not next(found) then return end
-
-    local entry
-    if run.lootCaptured then
-        entry = run.lootRuns[#run.lootRuns]
-        if not entry then return end -- Loot was cleared during this chest visit.
-    else
-        entry = { items = {}, slain = {} }
-        run.lootRuns[#run.lootRuns + 1] = entry
-        run.lootCaptured = true
-        loot.resetScroll()
-    end
-
-    local items = entry.items
-    local changed = updateSlain(entry, run) or #items == 0
-    for _, item in ipairs(items) do
-        local count = found[item.id]
-        if count and count > item.count then
-            item.count = count
-            changed = true
-        end
-        found[item.id] = nil
-    end
-    for _, itemId in ipairs(order) do
-        if found[itemId] then
-            items[#items + 1] = { id = itemId, count = found[itemId] }
-            changed = true
-        end
-    end
-    if changed then
-        dirty = true
-        save()
-    end
-end
-
--- A final kill update may follow the chest inventory event. Keep only
--- confirmed kills, and never add a history row for an unrecorded quick loot.
-function loot.recordSlain(run)
-    if not run.lootCaptured then return end
-    local entry = run.lootRuns[#run.lootRuns]
-    if entry and updateSlain(entry, run) then
-        dirty = true
-    end
-end
-
--- Start a different character or a new chest at the top of both lists.
+-- Start a new chest or a replaced history at the top of both lists.
 function loot.resetScroll()
     scrollY[1], scrollY[2] = 0, 0
     if tabs then
