@@ -1,67 +1,64 @@
 local hoverTip = {}
-local firstTipCategory = 120
-local overlay, target, tip, bossRows
+local overlayParent, overlay, target, tip, bossRows
 
--- Keep one tooltip outside the Plugin Hub's clipped dock. Its own dynamic ID
--- category avoids the shared top layer's exhausted category 0, and changing
--- text does not create more components as the dock scrolls or resizes.
+local function hasOverlay()
+    return overlay and ui.Interfaces:GetInterface(overlayParent.interfaceID)
+        and overlayParent:GetChild(overlay.categoryID, overlay.dynamicID) == overlay
+end
+
+-- Remove the custom children before hiding or reusing the PrettyUI frame.
+local function clearBossRows()
+    if not bossRows then return end
+    for _, row in ipairs(bossRows) do
+        row.line:Destroy()
+        row.label:Destroy()
+    end
+    bossRows = nil
+end
+
+-- The attachment may outlive its native parent during logout or a UI rebuild.
+function hoverTip.stop()
+    if hasOverlay() then
+        clearBossRows()
+        if tip then tip:Destroy() end
+        overlay:Destroy()
+    elseif tip then
+        pcall(tip.Destroy, tip)
+    end
+    overlayParent, overlay, target, tip, bossRows = nil, nil, nil, nil, nil
+end
+
+-- Keep the attachment outside the Plugin Hub's clipped dock.
 local function create()
     local parent = ui.Interfaces:GetComponent(
         id.Component.TOPLEVEL_V2__PLUGIN_BUILD_LAYER_TOP)
         or ui.Interfaces:GetComponent(id.Component.TOPLEVEL_V2__GAME_AREA)
     if not parent then return false end
-    if overlay and parent:GetChild(overlay.categoryID, overlay.dynamicID) == overlay then
-        return true
-    end
-    if tip then tip:Destroy() end
-    overlay, target, tip, bossRows = nil, nil, nil, nil
-    -- A category can itself be full in a long-running client. A failed frame
-    -- is removed before trying another, so a tooltip cannot break the dock.
-    for category = firstTipCategory, 235 do
-        local layer
-        local ok, newTarget, newTip = pcall(function()
-            layer = ui.Layer.new(parent, category)
-            layer:SetSize(0, 0, 1, 1)
-            layer.clickthrough = true
-            local anchor = ui.Layer.new(layer)
-            anchor:SetSize(0, 0)
-            anchor.hidden = true
-            local frame = prettyui.Tooltip.attach(anchor, layer,
-                { text = "Item", placement = "above", boundsMargin = 0 })
-            frame.label.font = id.Font.MUSEO_SANS_11PT_REGULAR
-            frame.label.alignHorizontal = ui.AlignMode.CENTRE
-            frame.label.alignVertical = ui.AlignMode.CENTRE
-            return anchor, frame
-        end)
-        if ok then
-            overlay, target, tip = layer, newTarget, newTip
-            return true
-        end
-        if layer then layer:Destroy() end
-        if not tostring(newTarget):find("Failed to create", 1, true) then
-            error(newTarget)
-        end
-    end
-    return false
+    if tip and parent == overlayParent and hasOverlay() then return true end
+    hoverTip.stop()
+
+    overlayParent = parent
+    overlay = prettyui.NewComponent(ui.Layer, parent, { categoryID = "auto" })
+    overlay:SetSize(0, 0, 1, 1)
+    overlay.clickthrough = true
+    target = prettyui.NewComponent(ui.Layer, overlay)
+    target:SetSize(0, 0)
+    target.hidden = true
+    tip = prettyui.Tooltip.attach(target, overlay,
+        { text = "Item", placement = "above", boundsMargin = 0 })
+    return true
 end
 
-local function hideBossRows()
-    if not bossRows then return end
-    for _, row in ipairs(bossRows) do
-        row.label.hidden = true
-        row.line.hidden = true
-    end
-end
-
--- Reuse the shared PrettyUI frame; only its contents change for run details.
+-- Boss rows belong to the current native tooltip frame.
 local function createBossRows(bosses)
     if bossRows then return end
-    bossRows = {}
+    local rows = {}
+    local root = tip.root
     local font = config.Font.MUSEO_SANS_11PT_REGULAR
     for index, boss in ipairs(bosses) do
         local x = 10 + ((index - 1) % 2) * 88
         local y = 12 + math.floor((index - 1) / 2) * 17
-        local label = ui.Text.new(tip.root)
+        local label = prettyui.NewComponent(ui.Text, root)
         label:SetPos(x, y)
         label:SetSize(78, 16)
         label.content = boss.name
@@ -70,15 +67,16 @@ local function createBossRows(bosses)
         label.clickthrough = true
         label.hidden = true
 
-        local line = ui.Line.new(tip.root)
+        local line = prettyui.NewComponent(ui.Line, root)
         line:SetPos(x, y + 8)
         line:SetSize(math.min(76, font:GetStringWidth(boss.name, false)), 1)
         line.width = 1
         line.colour = Vector4.new(1, 0.15, 0.15, 1)
         line.clickthrough = true
         line.hidden = true
-        bossRows[index] = { label = label, line = line }
+        rows[index] = { label = label, line = line }
     end
+    bossRows = rows
 end
 
 -- Centre tooltips over their targets, shifting them inward at screen edges.
@@ -94,8 +92,7 @@ end
 -- from screen coordinates so scrolled loot slots and dock icons agree.
 function hoverTip.show(x, y, width, label, maxWidth)
     if not create() then return end
-    hideBossRows()
-    tip.label.hidden = false
+    clearBossRows()
     local font = config.Font.MUSEO_SANS_11PT_REGULAR
     local tipWidth = math.min(maxWidth, math.max(21,
         font:GetStringWidthMultiline(label, maxWidth - 16, false, false, false) + 16))
@@ -105,6 +102,11 @@ function hoverTip.show(x, y, width, label, maxWidth)
     tip.options.placement = "above"
     tip.options.width = tipWidth
     tip.options.height = textHeight + 10
+    local text = tip.label
+    text.font = id.Font.MUSEO_SANS_11PT_REGULAR
+    text.alignHorizontal = ui.AlignMode.CENTRE
+    text.alignVertical = ui.AlignMode.CENTRE
+    text.hidden = false
     tip:SetText(label)
     tip:Show()
 end
@@ -112,11 +114,13 @@ end
 function hoverTip.showSlain(x, y, width, height, bosses, slain,
     showAkrisae, showLinza)
     if not create() then return end
-    createBossRows(bosses)
+    place(x, y + height - 3, width, 188)
+    tip.options.placement = "below"
     tip.options.width = 188
     tip.options.height = 96
     tip:SetText("")
     tip.label.hidden = true
+    createBossRows(bosses)
     for index, boss in ipairs(bosses) do
         local row = bossRows[index]
         local unlocked = (boss.id ~= "akrisae" or showAkrisae)
@@ -127,27 +131,18 @@ function hoverTip.showSlain(x, y, width, height, bosses, slain,
             or Vector4.new(1, 0.90, 0.68, 1)
         row.line.hidden = not slain[boss.id]
     end
-    place(x, y + height - 3, width, 188)
-    tip.options.placement = "below"
     tip:Show()
 end
 
 -- Hide the shared tooltip when its hovered icon leaves or the dock scrolls.
 function hoverTip.hide()
-    if tip then tip:Hide() end
-end
-
--- Release the persistent tooltip only when the plugin unloads.
-function hoverTip.stop()
-    if tip then tip:Destroy() end
-    local parent = ui.Interfaces:GetComponent(
-        id.Component.TOPLEVEL_V2__PLUGIN_BUILD_LAYER_TOP)
-        or ui.Interfaces:GetComponent(id.Component.TOPLEVEL_V2__GAME_AREA)
-    if overlay and parent
-        and parent:GetChild(overlay.categoryID, overlay.dynamicID) == overlay then
-        overlay:Destroy()
+    if not tip then return end
+    if hasOverlay() then
+        clearBossRows()
+        tip:Hide()
+    else
+        hoverTip.stop()
     end
-    overlay, target, tip, bossRows = nil, nil, nil, nil
 end
 
 return hoverTip

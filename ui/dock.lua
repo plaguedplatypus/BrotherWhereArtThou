@@ -1,7 +1,6 @@
 local bossOrder = require("barrows/bosses").displayOrder
 local hoverTip = require("ui/hoverTip")
 local loot = require("ui/loot")
-local ribbonToggle = require("ui/ribbonToggle")
 local settings = require("ui/settings")
 
 local dock = {}
@@ -165,7 +164,6 @@ local function buildContent()
     if not contentParent then return end
     if contentParent.width < 1 or contentParent.height < 1 then return end
     hoverTip.hide()
-    ribbonToggle.detach()
     if contentView then
         contentView:Destroy()
         contentView = nil
@@ -176,6 +174,7 @@ local function buildContent()
     contentRoot = root
     -- The Hub clips a short dock. Scroll the page while its navigation stays put.
     local view = prettyui.SimpleView.new(root, {
+        categoryID = "auto",
         x = 0, y = 0, width = contentParent.width,
         height = math.max(1, contentParent.height - 32), scrollStep = 24
     })
@@ -227,7 +226,6 @@ local function buildContent()
         contentScroll = 0
         contentDirty = true
     end)
-    ribbonToggle.attach(contentParent, queue, hasContentUi, buildContent)
     contentDirty = false
 end
 
@@ -254,7 +252,6 @@ end
 
 function dock.open(parent)
     hoverTip.hide()
-    ribbonToggle.close()
     if hasContentUi() then
         if contentView then
             contentScroll = contentView.scrollY
@@ -277,13 +274,11 @@ function dock.update()
     -- cleared. A brief child lookup miss during resize should not close it.
     if contentParent and not ui.Interfaces:GetInterface(contentParent.interfaceID) then
         hoverTip.hide()
-        ribbonToggle.close()
         contentParent, contentRoot, contentView = nil, nil, nil
     elseif contentRoot and not hasContentUi() then
         contentMissingTicks = contentMissingTicks + 1
         if contentMissingTicks >= resizeQuietTicks then
             hoverTip.hide()
-            ribbonToggle.close()
             contentParent, contentRoot, contentView = nil, nil, nil
         end
     else
@@ -311,9 +306,8 @@ function dock.update()
     end
 end
 
--- Release Hub layout changes before destroying the dock we own.
+-- The Hub owns the parent and may have already cleared the dock.
 function dock.stop()
-    ribbonToggle.close()
     if hasContentUi() then
         if contentView then contentView:Destroy() end
         contentRoot:Destroy()

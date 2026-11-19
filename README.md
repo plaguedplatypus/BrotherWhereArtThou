@@ -47,7 +47,7 @@ In the dock, use the settings button to show or hide combat style icons and Linz
 
 The plugin hides the game's Barrows panel while active and restores it when unloaded. Run state, loot history, Linza KC, and settings are saved locally for each character display name. A name change starts a separate save.
 
-> PrettyUI is required for the loot window; the Plugin Hub installs required dependencies.
+> The dock and loot window require PrettyUI 1.3.0 or later. The Plugin Hub installs required dependencies.
 
 ## Contact and feedback
 

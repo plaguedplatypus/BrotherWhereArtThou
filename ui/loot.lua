@@ -85,10 +85,10 @@ local function addGrid(page, canvas, items, columns, top)
         if item then
             local obj = config.Obj.FromID(math.floor(item.id))
             if obj then
-                local slot = ui.Layer.new(page.content)
+                local slot = prettyui.NewComponent(ui.Layer, page.content)
                 slot:SetPos(x, y)
                 slot:SetSize(slotSize, slotSize)
-                local sprite = ui.Sprite.new(slot)
+                local sprite = prettyui.NewComponent(ui.Sprite, slot)
                 sprite:SetPos(4, 4)
                 sprite:SetSize(32, 32)
                 sprite:SetAssociatedObject(math.tointeger(obj.id))
@@ -180,7 +180,7 @@ local function build()
             contentHeight = contentHeight + 24 + gridHeight(#entry.items, cols) + 24
         end
         contentHeight = contentHeight - 24 + 14
-        local canvas = ui.Canvas.new(perRun.content)
+        local canvas = prettyui.NewComponent(ui.Canvas, perRun.content)
         canvas:SetSize(width, contentHeight)
         canvas.clickthrough = true
         local y = 4
@@ -220,7 +220,7 @@ local function build()
     if #items > 0 then
         local cols = math.min(6, columns)
         local bottom = 28 + gridHeight(#items, cols) + 14
-        local canvas = ui.Canvas.new(combined.content)
+        local canvas = prettyui.NewComponent(ui.Canvas, combined.content)
         canvas:SetSize(width, bottom)
         canvas.clickthrough = true
         addGrid(combined, canvas, items, cols, 28)
@@ -243,10 +243,12 @@ function loot.open(savedRuns)
         local gameArea = ui.Interfaces:GetComponent(id.Component.TOPLEVEL_V2__GAME_AREA)
         if not gameArea then return end
         window = prettyui.Window.new(gameArea, {
+            categoryID = "auto",
             title = "Barrows Loot",
             x = -220, y = -200, xAnchor = 0.5, yAnchor = 0.5,
             width = 300, height = 400,
             resizable = true, minWidth = 300, minHeight = 180,
+            respectInterfaceLock = false,
             scrollable = false,
             -- PrettyUI otherwise leaves 12 units above the first content row.
             layout = { startY = -4 },
